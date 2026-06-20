@@ -1,8 +1,78 @@
 // Background service worker (Manifest V3)
-// Future role: relay voice text from content script to backend /api/generate,
-// receive the validated widget schema, and forward it back to the content script.
-// For now this is an empty stub.
+// Handles two responsibilities:
+//   1. OVERLAI_DETECT — captures the visible tab and calls the backend in detect mode,
+//      returning a suggestion (or null) to the requesting content script.
+//   2. Lifecycle logging.
+
+const BACKEND_BASE_URL = 'http://localhost:3000'
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Overlai] Extension installed — background service worker ready.')
 })
+
+// ---------------------------------------------------------------------------
+// Message handler
+// ---------------------------------------------------------------------------
+// Returns true to keep the message channel open for async sendResponse calls.
+// ---------------------------------------------------------------------------
+chrome.runtime.onMessage.addListener(
+  (
+    message: { type: string },
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: unknown) => void,
+  ) => {
+    if (message.type === 'OVERLAI_DETECT') {
+      handleDetect(sender, sendResponse)
+      // Return true = async response (channel stays open until sendResponse is called).
+      return true
+    }
+  },
+)
+
+async function handleDetect(
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
+  const windowId = sender.tab?.windowId
+
+  if (typeof windowId !== 'number') {
+    sendResponse(null)
+    return
+  }
+
+  // Capture the tab. captureVisibleTab is privileged — only the service worker can call it.
+  let imageDataUrl: string
+  try {
+    imageDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+      format: 'jpeg',
+      quality: 70,
+    })
+  } catch (err) {
+    // Protected pages (chrome://, extension pages) — fail silently.
+    console.warn('[Overlai SW] captureVisibleTab failed:', err)
+    sendResponse(null)
+    return
+  }
+
+  // POST to backend in detect mode.
+  try {
+    const res = await fetch(`${BACKEND_BASE_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageDataUrl, mode: 'detect' }),
+    })
+
+    if (!res.ok) {
+      console.warn('[Overlai SW] Backend detect returned', res.status)
+      sendResponse(null)
+      return
+    }
+
+    const data = (await res.json()) as { suggestion: unknown }
+    // data.suggestion is null when nothing notable was detected.
+    sendResponse(data.suggestion ?? null)
+  } catch (err) {
+    console.warn('[Overlai SW] Detect fetch failed:', err)
+    sendResponse(null)
+  }
+}

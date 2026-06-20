@@ -346,10 +346,31 @@ function resolveOverlaps(
   return result
 }
 
+// ---------------------------------------------------------------------------
+// Auto-dismiss timeout for proactive suggestions (ms).
+// ---------------------------------------------------------------------------
+const SUGGESTION_AUTO_DISMISS_MS = 12000
+
+// Derive a lightweight signature from a layout for dedup purposes.
+// Uses widget types + key identifying fields so identical detections are ignored.
+function layoutSignature(layout: Layout): string {
+  return layout.nodes
+    .map((n) => {
+      const w = n.widget
+      if (w.type === 'scoreboard') return `scoreboard:${w.teams.map((t) => `${t.name}:${t.score}`).join(',')}`
+      if (w.type === 'alert') return `alert:${w.message}`
+      if (w.type === 'timer') return `timer:${w.durationSeconds}`
+      if (w.type === 'statpanel') return `statpanel:${w.title ?? ''}:${w.stats.map((s) => s.label).join(',')}`
+      return (w as { type: string }).type
+    })
+    .sort()
+    .join('|')
+}
+
 type OverlayState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'layout'; data: Layout }
+  | { status: 'layout'; data: Layout; proactive?: boolean }
   | { status: 'error'; message: string }
 
 // Returns the reveal-order rank for a widget type.
@@ -393,6 +414,12 @@ export function Overlay() {
   // we only re-run the resolve pass when necessary (not on every render).
   const lastNodeFingerprintRef = useRef<string>('')
 
+  // Signature of the last proactive suggestion shown — used to skip duplicate detections.
+  const lastSuggestionSignatureRef = useRef<string>('')
+
+  // Timer ref for auto-dismissing proactive suggestions.
+  const suggestionDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Keep videoRect in sync with the page <video> element.
   useEffect(() => {
     function findVideo() {
@@ -405,25 +432,38 @@ export function Overlay() {
     return () => clearInterval(interval)
   }, [])
 
-  // Listen for intent queries dispatched by the content script.
+  // Helper: clear the proactive auto-dismiss timer.
+  function clearSuggestionTimer() {
+    if (suggestionDismissTimerRef.current !== null) {
+      clearTimeout(suggestionDismissTimerRef.current)
+      suggestionDismissTimerRef.current = null
+    }
+  }
+
+  // Helper: reset layout-related state before applying a new layout.
+  function resetLayoutState() {
+    if (revealTimerRef.current !== null) {
+      clearInterval(revealTimerRef.current)
+      revealTimerRef.current = null
+    }
+    clearSuggestionTimer()
+    setRevealedCount(0)
+    setPlacements(new Map())
+    lastNodeFingerprintRef.current = ''
+    widgetRefs.current.clear()
+  }
+
+  // Listen for intent queries dispatched by the content script (manual queries).
   useEffect(() => {
     async function handleQuery(event: Event) {
       const { text, image } = (event as CustomEvent<{ text: string; image?: string }>).detail
       if (!text) return
 
-      // Cancel any in-progress reveal sequence from the previous layout.
-      if (revealTimerRef.current !== null) {
-        clearInterval(revealTimerRef.current)
-        revealTimerRef.current = null
-      }
+      // Manual query takes precedence — clear any active proactive suggestion.
+      lastSuggestionSignatureRef.current = ''
+      resetLayoutState()
 
       setState({ status: 'loading' })
-      setRevealedCount(0)
-      // Clear placements when a new query starts so old resolved positions
-      // don't flash on the new layout.
-      setPlacements(new Map())
-      lastNodeFingerprintRef.current = ''
-      widgetRefs.current.clear()
 
       try {
         const body: { text: string; image?: string } = { text }
@@ -457,7 +497,8 @@ export function Overlay() {
         }
 
         setRevealedCount(0)
-        setState({ status: 'layout', data: layout })
+        // Manual query — not proactive.
+        setState({ status: 'layout', data: layout, proactive: false })
       } catch (err) {
         setState({
           status: 'error',
@@ -470,6 +511,55 @@ export function Overlay() {
 
     window.addEventListener('overlai:query', handleQuery)
     return () => window.removeEventListener('overlai:query', handleQuery)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Ref to the current state so the suggestion handler can read it without stale closure.
+  const stateRef = useRef<OverlayState>({ status: 'idle' })
+  stateRef.current = state
+
+  // Listen for proactive suggestions from the watch-mode polling loop.
+  useEffect(() => {
+    function handleSuggestion(event: Event) {
+      const layout = (event as CustomEvent<unknown>).detail
+
+      // Normalize and validate.
+      const parsed = ResponseSchema.safeParse(layout)
+      if (!parsed.success) return
+      const normalized = normalizeToLayout(parsed.data)
+      if (!normalized) return
+
+      // Dedup: skip if the signature matches the currently shown suggestion.
+      const sig = layoutSignature(normalized)
+      if (sig === lastSuggestionSignatureRef.current) return
+
+      // If a manual query layout is currently shown, do not override it.
+      // Only override idle or a previous proactive suggestion.
+      const current = stateRef.current
+      if (current.status === 'layout' && !current.proactive) return
+
+      // Apply the new suggestion — side effects outside setState.
+      lastSuggestionSignatureRef.current = sig
+      resetLayoutState()
+
+      // Auto-dismiss after SUGGESTION_AUTO_DISMISS_MS.
+      suggestionDismissTimerRef.current = setTimeout(() => {
+        lastSuggestionSignatureRef.current = ''
+        setState((s) => (s.status === 'layout' && s.proactive ? { status: 'idle' } : s))
+      }, SUGGESTION_AUTO_DISMISS_MS)
+
+      setState({ status: 'layout', data: normalized, proactive: true })
+    }
+
+    window.addEventListener('overlai:suggestion', handleSuggestion)
+    return () => window.removeEventListener('overlai:suggestion', handleSuggestion)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clean up auto-dismiss timer on unmount.
+  useEffect(() => {
+    return () => clearSuggestionTimer()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fallback video rect when no <video> is found: treat the full viewport as the rect.
@@ -722,6 +812,40 @@ export function Overlay() {
           from all slot candidates during relocation. Widgets that land in the
           center zone due to the model's original assignment are relocated first.
       */}
+      {/* Proactive "✨ Auto" chip — shown when a suggestion is active */}
+      <AnimatePresence>
+        {state.status === 'layout' && state.proactive && (
+          <motion.div
+            key="overlai-auto-chip"
+            initial={{ opacity: 0, scale: 0.85 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.85 }}
+            transition={{ duration: 0.2 }}
+            style={{
+              position: 'fixed',
+              // Place at bottom-right of the video, just above the bottom edge.
+              bottom: window.innerHeight - effectiveRect.bottom + SLOT_PADDING + 4,
+              right: window.innerWidth - effectiveRect.right + SLOT_PADDING,
+              background: 'rgba(250, 204, 21, 0.15)',
+              border: '1px solid rgba(250, 204, 21, 0.5)',
+              backdropFilter: 'blur(6px)',
+              WebkitBackdropFilter: 'blur(6px)',
+              color: '#facc15',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '3px 8px',
+              borderRadius: 999,
+              fontFamily: 'monospace',
+              letterSpacing: '0.03em',
+              pointerEvents: 'none',
+              zIndex: 2147483646,
+            }}
+          >
+            ✨ Auto
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="popLayout">
         {revealOrderedNodes.slice(0, revealedCount).map((node) => {
           const WidgetComponent = getWidget(node.widget.type)

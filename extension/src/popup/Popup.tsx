@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { recognizeOnce, isSpeechSupported } from '../lib/voice'
 
 type Status = 'idle' | 'listening' | 'sending' | 'done' | 'error'
@@ -61,8 +61,34 @@ export function Popup() {
   const [text, setText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [statusMsg, setStatusMsg] = useState('')
+  const [watchMode, setWatchMode] = useState(false)
 
   const speechAvailable = isSpeechSupported()
+
+  // Load persisted watch mode state on mount.
+  useEffect(() => {
+    chrome.storage.local.get('watchMode', (result) => {
+      if (typeof result.watchMode === 'boolean') {
+        setWatchMode(result.watchMode)
+      }
+    })
+  }, [])
+
+  async function handleWatchToggle() {
+    const next = !watchMode
+    setWatchMode(next)
+    chrome.storage.local.set({ watchMode: next })
+
+    // Notify the active tab's content script immediately.
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, { type: 'OVERLAI_WATCH', enabled: next })
+      }
+    } catch {
+      // Tab may not have the content script (e.g. chrome:// pages) — ignore.
+    }
+  }
 
   async function handleMic() {
     setStatus('listening')
@@ -142,6 +168,27 @@ export function Popup() {
           Go
         </button>
       </form>
+
+      {/* Watch mode toggle */}
+      <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-700">
+        <span className="text-xs text-gray-400">Watch mode</span>
+        <button
+          onClick={handleWatchToggle}
+          className={`relative inline-flex items-center w-10 h-5 rounded-full transition-colors focus:outline-none ${
+            watchMode ? 'bg-yellow-400' : 'bg-gray-600'
+          }`}
+          title={watchMode ? 'Watch mode ON — auto-detecting events' : 'Watch mode OFF'}
+        >
+          <span
+            className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform ${
+              watchMode ? 'translate-x-5' : 'translate-x-1'
+            }`}
+          />
+        </button>
+      </div>
+      {watchMode && (
+        <p className="text-xs text-yellow-400 text-center mt-1">Watching for events...</p>
+      )}
 
       {/* Status line */}
       {statusMsg && (

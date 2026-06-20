@@ -34,9 +34,12 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   const body = await request.json()
-  const { text, image } = body as { text?: string; image?: string }
+  const { text, image, mode } = body as { text?: string; image?: string; mode?: string }
 
-  if (!text || typeof text !== 'string') {
+  // Detect mode: vision-only proactive scan — no user text required.
+  const isDetectMode = mode === 'detect'
+
+  if (!isDetectMode && (!text || typeof text !== 'string')) {
     return Response.json(
       { error: 'text is required' },
       { status: 400, headers: CORS_HEADERS }
@@ -45,15 +48,24 @@ export async function POST(request: Request) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY
 
-  // --- No API key: return a hardcoded valid Layout so the UI still works in dev ---
+  // --- No API key ---
   if (!apiKey) {
+    if (isDetectMode) {
+      // In detect mode without a key, return null suggestion to avoid demo spam.
+      return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+    }
     console.warn(
       '[overlai] ANTHROPIC_API_KEY is not set — returning hardcoded fallback layout.'
     )
     return Response.json(FALLBACK_LAYOUT, { headers: CORS_HEADERS })
   }
 
-  // --- Real Claude call via structured output (tool use) ---
+  // --- Detect mode: proactive event detection ---
+  if (isDetectMode) {
+    return handleDetectMode(image, apiKey)
+  }
+
+  // --- Generate mode (default): forced tool_choice, unchanged behavior ---
   const client = new Anthropic({ apiKey })
 
   // When a screenshot is provided, use sonnet (better at reading on-screen text).
@@ -358,4 +370,193 @@ Call render_layout with the best matching layout.`
   }
 
   return Response.json(layoutParsed.data, { headers: CORS_HEADERS })
+}
+
+// ---------------------------------------------------------------------------
+// Detect mode handler — proactive event detection (no user text)
+// ---------------------------------------------------------------------------
+// Tool use is OPTIONAL here (no tool_choice forced). Claude may choose NOT to
+// call render_layout if nothing notable is on screen, in which case we return
+// { suggestion: null }. Only when Claude detects a notable event (goal, card,
+// penalty, big score change) will it call render_layout.
+// ---------------------------------------------------------------------------
+async function handleDetectMode(
+  image: string | undefined,
+  apiKey: string,
+): Promise<Response> {
+  const hasImage = typeof image === 'string' && image.startsWith('data:')
+
+  if (!hasImage) {
+    // Detect mode requires an image to analyze.
+    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+  }
+
+  const client = new Anthropic({ apiKey })
+
+  const commaIndex = image!.indexOf(',')
+  const base64Data = commaIndex !== -1 ? image!.slice(commaIndex + 1) : image!
+
+  const detectInstruction = `You are a sports broadcast monitor. Look at this live broadcast frame carefully.
+
+ONLY call render_layout if there is a NOTABLE event or state worth surfacing RIGHT NOW:
+- A goal just scored
+- A card shown (red or yellow)
+- A penalty awarded
+- A significant score change or milestone
+- A dramatic moment (VAR decision, injury, substitution shown on screen)
+
+If the broadcast looks routine — normal play, pre-match, half-time generic footage, or nothing remarkable — do NOT call render_layout. It is better to stay silent than to show irrelevant widgets.
+
+If you DO detect something notable, call render_layout with an appropriate widget or layout that highlights what is happening. Use only data visible in the screenshot.`
+
+  type UserContent = Anthropic.MessageParam['content']
+  const userContent: UserContent = [
+    {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/jpeg',
+        data: base64Data,
+      },
+    },
+    {
+      type: 'text',
+      text: detectInstruction,
+    },
+  ]
+
+  // Same render_layout tool definition as generate mode, but tool_choice is NOT forced.
+  // Claude can choose to call it or not.
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    tools: [
+      {
+        name: 'render_layout',
+        description:
+          'Compose a layout of 1–3 overlay widgets for a notable live broadcast event. ' +
+          'Only call this when something genuinely notable is happening.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            nodes: {
+              type: 'array',
+              description: '1–3 widget nodes for the detected event.',
+              minItems: 1,
+              maxItems: 3,
+              items: {
+                type: 'object',
+                properties: {
+                  slot: {
+                    type: 'string',
+                    enum: [
+                      'top-left', 'top-center', 'top-right',
+                      'middle-left', 'middle-right',
+                      'bottom-left', 'bottom-center', 'bottom-right',
+                    ],
+                  },
+                  zIndex: { type: 'integer' },
+                  widget_type: {
+                    type: 'string',
+                    enum: ['scoreboard', 'timer', 'statpanel', 'alert'],
+                  },
+                  teams: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                        score: { type: 'integer', minimum: 0 },
+                      },
+                      required: ['name', 'score'],
+                    },
+                    minItems: 2,
+                    maxItems: 2,
+                  },
+                  minute: { type: 'integer', minimum: 0 },
+                  durationSeconds: { type: 'integer', minimum: 1 },
+                  label: { type: 'string' },
+                  title: { type: 'string' },
+                  stats: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        label: { type: 'string' },
+                        value: { type: 'string' },
+                      },
+                      required: ['label', 'value'],
+                    },
+                    minItems: 1,
+                    maxItems: 6,
+                  },
+                  message: { type: 'string' },
+                  tone: {
+                    type: 'string',
+                    enum: ['info', 'success', 'warning'],
+                  },
+                },
+                required: ['slot', 'widget_type'],
+              },
+            },
+          },
+          required: ['nodes'],
+        },
+      },
+    ],
+    // No tool_choice here — Claude can choose to not call the tool (suggest nothing).
+    messages: [{ role: 'user', content: userContent }],
+  })
+
+  // Check whether Claude called the tool.
+  const toolUse = response.content.find((block) => block.type === 'tool_use')
+
+  // No tool_use block = nothing notable detected.
+  if (!toolUse || toolUse.type !== 'tool_use') {
+    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+  }
+
+  // Reshape flat nodes → nested LayoutNodes (same as generate mode).
+  const rawInput = toolUse.input as {
+    nodes: Array<{
+      slot: string
+      zIndex?: number
+      widget_type: string
+      teams?: Array<{ name: string; score: number }>
+      minute?: number
+      durationSeconds?: number
+      label?: string
+      title?: string
+      stats?: Array<{ label: string; value: string }>
+      message?: string
+      tone?: string
+    }>
+  }
+
+  const validNodes: Array<{ slot: string; zIndex?: number; widget: unknown }> = []
+
+  for (const rawNode of rawInput.nodes ?? []) {
+    const { slot, zIndex, widget_type, ...widgetFields } = rawNode
+    const widgetCandidate = { type: widget_type, ...widgetFields }
+    const widgetParsed = WidgetNodeSchema.safeParse(widgetCandidate)
+    if (!widgetParsed.success) {
+      console.warn('[overlai detect] Dropping invalid node:', widgetParsed.error.message)
+      continue
+    }
+    validNodes.push({ slot, zIndex, widget: widgetParsed.data })
+  }
+
+  if (validNodes.length === 0) {
+    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+  }
+
+  const layoutCandidate = { type: 'layout' as const, nodes: validNodes }
+  const layoutParsed = LayoutSchema.safeParse(layoutCandidate)
+
+  if (!layoutParsed.success) {
+    console.warn('[overlai detect] Layout validation failed:', layoutParsed.error)
+    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+  }
+
+  return Response.json({ suggestion: layoutParsed.data }, { headers: CORS_HEADERS })
 }

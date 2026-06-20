@@ -5,7 +5,59 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Overlay } from './Overlay'
 
-// The overlay root element (created once).
+// ---------------------------------------------------------------------------
+// Watch mode polling
+// ---------------------------------------------------------------------------
+// The polling timer lives here (content script) because it must survive popup
+// close/open cycles. Each tick asks the SERVICE WORKER to capture the tab
+// (content scripts cannot call captureVisibleTab). The service worker returns
+// a suggestion layout or null.
+// ---------------------------------------------------------------------------
+
+/** Interval between watch-mode detect probes. */
+const WATCH_INTERVAL_MS = 8000
+
+let watchInterval: ReturnType<typeof setInterval> | null = null
+
+/** Guard: skip a tick if a previous detect is still in flight. */
+let detectBusy = false
+
+function startWatchMode(): void {
+  if (watchInterval !== null) return // already running
+
+  watchInterval = setInterval(async () => {
+    if (detectBusy) return
+    detectBusy = true
+
+    try {
+      const suggestion = await chrome.runtime.sendMessage({ type: 'OVERLAI_DETECT' })
+      if (suggestion !== null && suggestion !== undefined) {
+        // Dispatch a custom event so Overlay.tsx can handle it.
+        window.dispatchEvent(new CustomEvent('overlai:suggestion', { detail: suggestion }))
+      }
+    } catch {
+      // Runtime may be unavailable briefly during extension reload.
+    } finally {
+      detectBusy = false
+    }
+  }, WATCH_INTERVAL_MS)
+
+  console.log('[Overlai] Watch mode started (interval %dms)', WATCH_INTERVAL_MS)
+}
+
+function stopWatchMode(): void {
+  if (watchInterval !== null) {
+    clearInterval(watchInterval)
+    watchInterval = null
+    detectBusy = false
+    console.log('[Overlai] Watch mode stopped')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Overlay mount
+// ---------------------------------------------------------------------------
+
 let overlayRoot: ReactDOM.Root | null = null
 
 function mount() {
@@ -36,13 +88,33 @@ if (document.readyState === 'loading') {
   mount()
 }
 
-// Listen for text (and optional screenshot) messages from the popup.
-// The popup calls chrome.tabs.sendMessage({ type: 'OVERLAI_TEXT', text, image? }).
+// ---------------------------------------------------------------------------
+// Message listeners
+// ---------------------------------------------------------------------------
+
 chrome.runtime.onMessage.addListener((message) => {
+  // Manual query from popup (text + optional screenshot).
   if (message?.type === 'OVERLAI_TEXT' && typeof message.text === 'string') {
     const detail: { text: string; image?: string } = { text: message.text }
     if (typeof message.image === 'string') detail.image = message.image
-    // Dispatch a custom event that Overlay.tsx can listen to.
     window.dispatchEvent(new CustomEvent('overlai:query', { detail }))
+  }
+
+  // Watch mode toggle from popup.
+  if (message?.type === 'OVERLAI_WATCH' && typeof message.enabled === 'boolean') {
+    if (message.enabled) {
+      startWatchMode()
+    } else {
+      stopWatchMode()
+    }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Resume watch mode if it was active before a page reload.
+// ---------------------------------------------------------------------------
+chrome.storage.local.get('watchMode', (result) => {
+  if (result.watchMode === true) {
+    startWatchMode()
   }
 })
