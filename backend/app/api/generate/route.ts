@@ -427,8 +427,11 @@ If you DO detect something notable, call render_layout with an appropriate widge
 
   // Same render_layout tool definition as generate mode, but tool_choice is NOT forced.
   // Claude can choose to call it or not.
+  // Use haiku for detect mode: faster and cheaper for high-frequency polling.
+  // Sonnet is preserved for generate mode (manual queries with image) where
+  // accuracy and on-screen text reading quality matter more.
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-haiku-4-5',
     max_tokens: 1024,
     tools: [
       {

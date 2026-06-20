@@ -406,6 +406,12 @@ export function Overlay() {
   // when a new query replaces the current layout.
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Refs for the hidden measurement layer — keyed by nodeKey (original slot::type).
+  // The useLayoutEffect measure pass reads ONLY from this map.
+  // Kept separate from any visible-layer refs so visible-layer unmount callbacks
+  // cannot delete a measurement ref and corrupt the measure pass.
+  const measureRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
   // Refs for measuring each widget container after render.
   // keyed by nodeKey (original slot::type).
   const widgetRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -450,6 +456,7 @@ export function Overlay() {
     setRevealedCount(0)
     setPlacements(new Map())
     lastNodeFingerprintRef.current = ''
+    measureRefs.current.clear()
     widgetRefs.current.clear()
   }
 
@@ -662,11 +669,14 @@ export function Overlay() {
 
     lastNodeFingerprintRef.current = nodeFingerprint
 
-    // Collect measured rects from widget container refs.
+    // Collect measured rects from the hidden measurement layer refs.
+    // measureRefs holds the hidden-layer divs (opacity:0, zIndex:-1) which are
+    // rendered for ALL nodes regardless of revealedCount, making them the correct
+    // and complete source for the collision resolver's measure pass.
     const measuredRects = new Map<string, DOMRect>()
     for (const node of deduplicatedNodes) {
       const key = nodeKey(node)
-      const el = widgetRefs.current.get(key)
+      const el = measureRefs.current.get(key)
       if (el) {
         measuredRects.set(key, el.getBoundingClientRect())
       }
@@ -763,8 +773,10 @@ export function Overlay() {
           <div
             key={`measure::${key}`}
             ref={(el) => {
-              if (el) widgetRefs.current.set(key, el)
-              // Do not delete on unmount here — the visible layer's ref handles that.
+              // Write into the dedicated measurement ref map only.
+              // The visible layer uses widgetRefs and must never touch this map.
+              if (el) measureRefs.current.set(key, el)
+              else measureRefs.current.delete(key)
             }}
             aria-hidden="true"
             style={{ ...style, opacity: 0, pointerEvents: 'none', zIndex: -1 }}
@@ -869,10 +881,6 @@ export function Overlay() {
           return (
             <div
               key={key}
-              ref={(el) => {
-                if (el) widgetRefs.current.set(key, el)
-                else widgetRefs.current.delete(key)
-              }}
               style={{ ...style, zIndex: node.zIndex ?? 10 }}
             >
               {/* delay=0: the REVEAL_INTERVAL_MS timer is the stagger; no double-delay. */}

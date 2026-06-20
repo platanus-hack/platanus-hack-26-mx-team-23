@@ -15,7 +15,7 @@ import { Overlay } from './Overlay'
 // ---------------------------------------------------------------------------
 
 /** Interval between watch-mode detect probes. */
-const WATCH_INTERVAL_MS = 8000
+const WATCH_INTERVAL_MS = 3500
 
 let watchInterval: ReturnType<typeof setInterval> | null = null
 
