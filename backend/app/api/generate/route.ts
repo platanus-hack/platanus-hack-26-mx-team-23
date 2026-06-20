@@ -9,12 +9,10 @@ const FALLBACK_LAYOUT = {
     {
       slot: 'top-center' as const,
       widget: {
-        type: 'scoreboard' as const,
-        teams: [
-          { name: 'Real Madrid', score: 2 },
-          { name: 'FC Barcelona', score: 1 },
-        ],
-        minute: 67,
+        type: 'infocard' as const,
+        title: 'Overlai',
+        body: 'No API key configured. Add ANTHROPIC_API_KEY to your .env.local file.',
+        accent: 'blue' as const,
       },
     },
   ],
@@ -80,94 +78,125 @@ export async function POST(request: Request) {
 
   // Build optional history context block to inject into the instruction text.
   // When the client provides recent interaction history, Claude uses it to resolve
-  // pronoun references and follow-up questions (e.g. "and his stats?", "the other team?").
+  // pronoun references and follow-up questions (e.g. "what does that mean?", "summarize more").
   const historyBlock =
     Array.isArray(history) && history.length > 0
       ? `\nRecent interactions in this session (most recent last):\n${history
           .map((h, i) => `  ${i + 1}. User asked: "${h.query}" → showed: ${h.summary}`)
           .join('\n')}\n\nUse the above history to resolve references in the user's new request. ` +
-        `For example, if the user says "and his stats?" or "what about the other team?", ` +
-        `identify the relevant team or subject from the most recent relevant interaction and answer about that.\n`
+        `For example, if the user says "tell me more" or "what about the other team?", ` +
+        `identify the relevant subject from the most recent relevant interaction and answer about that.\n`
       : ''
 
   // Build the instruction text.
   const instructionText = hasImage
-    ? `You are a sports overlay assistant. The screenshot shows the current state of a live broadcast.
+    ? `You are a generative overlay assistant. The screenshot shows a video currently playing.
 ${historyBlock}
-STEP 1 — Identify the PRIMARY live match:
-  The PRIMARY match is the one being actively played in the MAIN video frame — the large central video area.
-  It is NOT a picture-in-picture feed, NOT a commentator webcam, and NOT a promo/teaser for an upcoming game.
+STEP 1 — Identify the DOMAIN of the PRIMARY content in the MAIN video frame:
+  The PRIMARY content is what is being actively shown in the large central video area.
+  It is NOT a picture-in-picture feed, NOT a commentator webcam, NOT a promo/teaser for upcoming content.
 
-  a) Find the main scorebug (score bug): a dedicated broadcast graphic tied to the live action in the main frame.
-     It is usually pinned to the top-left or bottom area of the main video. This is the authoritative source for
-     team names, score, and match clock.
-  b) Identify the MAIN ACTION AREA: where is the ball / play happening? What region of the screen is the center of attention?
-  c) Identify existing ON-SCREEN broadcast graphics: score bug, lower-thirds, team logos, sponsor banners, clock overlays.
-  d) Identify any EMPTY regions that have no text or graphics burned in.
+  Determine the domain:
+  - SPORT MATCH: live game with score graphics, a pitch/court/field, teams competing
+  - LECTURE / TALK: a presenter, slides, whiteboard, or educational content
+  - COOKING: food preparation, ingredients, kitchen environment
+  - GAMEPLAY: a video game being played, game UI visible
+  - OTHER: news, documentary, tutorial, etc.
 
-STEP 2 — IGNORE these elements entirely — do NOT read or use data from them:
-  - The scrolling TICKER or results bar at the very bottom of the screen (shows OTHER match scores).
-  - Scores, team names, or results from any match OTHER than the primary live match in the main frame.
-  - "Up next", "Coming up", "Próximo partido", or any promotion for a future match.
-  - League standings tables or tournament brackets.
+  For sport matches:
+    a) Find the main scorebug (score bug): a dedicated broadcast graphic tied to the live action in the main frame.
+       It is usually pinned to the top-left or bottom area of the main video. This is the authoritative source for
+       team names, score, and match clock.
+    b) Identify the MAIN ACTION AREA: where is the ball / play happening?
+    c) Identify existing ON-SCREEN broadcast graphics: score bug, lower-thirds, team logos.
+    d) Identify any EMPTY regions that have no text or graphics burned in.
+
+STEP 2 — IGNORE these elements — do NOT read or use data from them:
+  - Scrolling tickers / results bars showing OTHER content scores or headlines.
+  - Scores, names, or results from any match OTHER than the primary content.
+  - "Up next", "Coming up", or any promotion for future content.
+  - League standings tables, tournament brackets.
   - Channel logos, sponsor banners, social media handles, watermarks.
   - Any picture-in-picture box or commentator webcam feed.
-  If multiple scores appear, only the PRIMARY match's scorebug (attached to the live main-frame action) is valid.
-  If you cannot confidently identify which score belongs to the primary live match, omit uncertain fields or use placeholders.
+  - Overlays or UI that are NOT part of the main video content.
+  If you cannot confidently read data from the primary content, omit uncertain fields or use placeholders.
 
-STEP 3 — Choose slots that:
-  - AVOID the main action area (center of the screen where the play is happening).
-  - AVOID covering existing broadcast graphics already burned into the feed.
-  - PREFER the identified empty regions.
-  - SPREAD OUT widgets: never cluster two wide widgets in adjacent top slots (e.g. do NOT use top-center AND top-right
-    for two wide scoreboard/alert widgets — they will collide). Instead spread across top and bottom, or left and right.
+STEP 3 — Choose the MOST APPROPRIATE widgets for the detected domain + user intent:
+
+  SPORT MATCH:
+  - scoreboard: live match scores and team information
+  - statpanel: match statistics (possession, shots, corners, pass accuracy, etc.)
+  - timer: when user wants a countdown or timer
+  - alert: short announcements like "GOAL!", "Penalty!", "Red card!", or key events
+  - momentum: when user asks about win probability, who's going to win, or momentum.
+    Use momentum_teams (exactly 2) with integer probabilities summing to ~100. Base the estimate on
+    the visible score, match clock, and game state — NOT on prior knowledge. Always add a momentum_note
+    such as "Estimate based on score & time" to make clear it is an approximation.
+
+  LECTURE / TUTORIAL / TALK:
+  - infocard: for context, facts, or a brief explanation (e.g. "who is this speaker?")
+  - keypoints: for summaries, key takeaways, or "what is this lecture about?" requests
+  - definition: when user asks "what does X mean?" or about a specific term shown/mentioned
+  - statpanel: for structured data or comparisons visible on slides
+
+  COOKING:
+  - keypoints: for recipe steps, ingredients list, or technique summaries
+  - timer: for cook times, rest times, or baking durations
+  - infocard: for context about a dish, ingredient, or technique
+
+  GAMEPLAY:
+  - infocard: for game facts, lore, or item descriptions
+  - statpanel: for character stats, inventory, or game metrics visible on screen
+  - alert: for notable in-game events
+
+  ANY DOMAIN (safe generic fallback):
+  - infocard: general context or information the user asked about
+  - keypoints: any list-style answer (steps, highlights, summary)
+
+STEP 4 — Choose slots that:
+  - AVOID the main action area (center of the screen where the content is happening).
+  - AVOID covering existing graphics already burned into the feed.
+  - PREFER identified empty regions.
+  - SPREAD OUT widgets: never cluster two wide widgets in adjacent top slots.
 
 Available slots: top-left, top-center, top-right, middle-left, middle-right, bottom-left, bottom-center, bottom-right.
 - top-* = upper 25% of video; bottom-* = lower 25%; middle-* = side edges at vertical center.
-- Wide widgets (scoreboard, statpanel) need at least ~300px. top-center and top-right are adjacent — using both for wide widgets causes overlap.
+- Wide widgets need at least ~300px. top-center and top-right are adjacent — using both for wide widgets causes overlap.
 - Prefer non-adjacent slots for multi-widget layouts: e.g. top-left + bottom-right, or top-center + bottom-left.
 
-STEP 4 — Use ONLY data visible in the screenshot for the PRIMARY match. Do not use prior knowledge of teams or scores.
-
-Widget types:
-- scoreboard: for live match scores and team information
-- statpanel: for match statistics (possession, shots, corners, etc.)
-- timer: when the user wants a countdown or timer
-- alert: for short announcements like "GOAL!", "Penalty!", or key events
-- momentum: when the user asks about win probability, who's going to win, momentum, or "quién va ganando".
-  Use momentum_teams (exactly 2) with integer probabilities summing to ~100. Base the estimate on
-  the visible score, match clock, and game state — NOT on prior knowledge. Always add a momentum_note
-  such as "Estimate based on score & time" to make clear it is an approximation, not official data.
+STEP 5 — Use ONLY data visible in the screenshot for the primary content. Do not use prior knowledge.
 
 The user said: "${text}".
-Compose the best layout for this intent. For broad requests like "show me the match" or "full overview",
-use multiple widgets — e.g. scoreboard top-left + statpanel bottom-right (non-adjacent, non-colliding).
+Compose the best layout for this intent. For broad requests like "summarize this" or "full overview",
+use multiple widgets — e.g. keypoints top-left + infocard bottom-right (non-adjacent, non-colliding).
 For single-widget requests, one node is fine.
-Call render_layout with the data you can read from the PRIMARY live match in the broadcast.`
-    : `You are a sports overlay assistant. The user said: "${text}".
+Call render_layout with the data you can read from the PRIMARY content in the video.`
+    : `You are a generative overlay assistant. The user said: "${text}".
 ${historyBlock}
 You must call render_layout to compose a layout of 1–6 widgets placed in screen slots.
 Available slots: top-left, top-center, top-right, middle-left, middle-right, bottom-left, bottom-center, bottom-right.
 
-Widget types:
-- scoreboard: questions about the score, match result, or teams playing (e.g. "what's the score?", "show me the scoreboard")
+Widget types — choose based on the user's intent:
+- scoreboard: questions about a live game score, match result, or teams playing
 - timer: when the user wants a countdown or timer (e.g. "start a 5 minute timer", "30 second countdown")
-- statpanel: when the user asks for match statistics like possession, shots on target, corners, or pass accuracy
-- alert: for short dramatic announcements or events (e.g. "goal!", "show penalty alert", "red card")
-- momentum: when the user asks "who's going to win", "win probability", "momentum", or "quién va ganando".
+- statpanel: when the user asks for statistics, numbers, or structured comparisons
+- alert: for short dramatic announcements or events (e.g. "goal!", "important alert", "red card")
+- momentum: when the user asks "who's going to win", "win probability", or "momentum" for a sports match.
   Use momentum_teams (exactly 2 entries) with integer probabilities 0–100 summing to ~100.
-  Base probabilities on the visible score and time — this is an ESTIMATE, not official data.
-  Always set momentum_note to a disclaimer like "Estimate based on score & time".
+  Base probabilities on visible score and time. Always set momentum_note to a disclaimer.
+- infocard: for facts, context, or brief explanations about anything in the video
+- keypoints: for summaries, steps, highlights, or any list-style answer (1–6 bullet points)
+- definition: when the user asks what a term means or wants a concept explained
 
 Slot placement rules:
-- SPREAD widgets across the screen — avoid adjacent top slots for two wide widgets (e.g. top-center + top-right collide).
+- SPREAD widgets across the screen — avoid adjacent top slots for two wide widgets.
 - Prefer non-adjacent combinations: top-left + bottom-right, top-center + bottom-left, etc.
 - Avoid the center of the screen (middle-left and middle-right are safer than top-center for secondary widgets).
 
-For broad requests like "show me the full match" or "give me the full match overview", compose multiple widgets
-(e.g. scoreboard top-left + statpanel bottom-right — non-adjacent, non-colliding).
+For broad requests like "summarize this" or "give me an overview", compose multiple widgets
+(e.g. keypoints top-left + infocard bottom-right — non-adjacent, non-colliding).
 For focused single-intent requests, one node is fine.
-If no real data is known, invent plausible example data for a demo.
+If no real data is available, invent plausible example data for a demo.
 Call render_layout with the best matching layout.`
 
   // Build the user content: image block (if present) followed by the instruction text.
@@ -198,14 +227,15 @@ Call render_layout with the best matching layout.`
 
   // The tool schema supports a flat layout of 1–6 widget nodes.
   // Each node has: slot (enum), widget (flat object with all widget fields), optional zIndex.
-  // The `widget.type` field discriminates which widget it is; per-type required fields
+  // The `widget_type` field discriminates which widget it is; per-type required fields
   // are enforced by Zod after Claude returns the tool input (backstop validation).
   //
   // FLAT structure: no recursion, no nested arrays of arrays — required by Anthropic
   // strict structured outputs which do not support recursive schemas.
   //
-  // strict: true enables native Anthropic arg validation as a first layer.
-  // Zod per-node validation is kept as the backstop (see graceful fallback below).
+  // Prefixed field names (momentum_teams, kp_points, def_term, def_definition,
+  // infocard_title, infocard_body, infocard_accent) avoid collision when multiple
+  // widget types share semantically similar field names in the same flat object.
   const response = await client.messages.create({
     model,
     max_tokens: 2048,
@@ -215,10 +245,9 @@ Call render_layout with the best matching layout.`
         description:
           'Compose a layout of 1–6 overlay widgets placed in fixed screen slots. ' +
           'Each node specifies a slot position and a widget. ' +
-          'Use multiple nodes when the user\'s intent benefits from seeing several widgets at once ' +
-          '(e.g. "show me the full match" → scoreboard top-center + statpanel bottom-left). ' +
+          'Use multiple nodes when the user\'s intent benefits from several widgets at once. ' +
           'Single-widget requests can use one node. ' +
-          'Choose slots to avoid covering the main broadcast action.',
+          'Choose slots to avoid covering the main video content.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -251,15 +280,23 @@ Call render_layout with the best matching layout.`
                     description: 'Optional stacking order. Higher = on top. Default 10.',
                   },
                   // widget fields — flat (not nested object) to comply with strict mode limits.
-                  // The `widget_type` field discriminates; all widget field names are unique
-                  // across widget types so they can coexist in one flat object.
                   widget_type: {
                     type: 'string',
-                    enum: ['scoreboard', 'timer', 'statpanel', 'alert', 'momentum'],
+                    enum: [
+                      'scoreboard',
+                      'timer',
+                      'statpanel',
+                      'alert',
+                      'momentum',
+                      'infocard',
+                      'keypoints',
+                      'definition',
+                    ],
                     description:
                       'Type of widget to render. ' +
-                      'scoreboard=live score, timer=countdown, statpanel=match stats, alert=announcement, ' +
-                      'momentum=win probability bar showing each team\'s estimated win chance.',
+                      'scoreboard=live score, timer=countdown, statpanel=stats table, alert=announcement, ' +
+                      'momentum=win-probability bar, infocard=titled info card, ' +
+                      'keypoints=bullet list, definition=term explanation.',
                   },
                   // scoreboard fields
                   teams: {
@@ -321,7 +358,7 @@ Call render_layout with the best matching layout.`
                     description:
                       '[alert] Visual accent: info=blue, success=green, warning=orange.',
                   },
-                  // momentum fields
+                  // momentum fields (prefixed to avoid collision with scoreboard `teams`)
                   momentum_teams: {
                     type: 'array',
                     items: {
@@ -341,12 +378,48 @@ Call render_layout with the best matching layout.`
                     maxItems: 2,
                     description:
                       '[momentum] Exactly two teams with their estimated win probabilities. ' +
-                      'Values should sum to ~100. This is an ESTIMATE based on score and time — not official data.',
+                      'Values should sum to ~100. ESTIMATE based on score and time — not official data.',
                   },
                   momentum_note: {
                     type: 'string',
                     description:
-                      '[momentum] Optional short note shown below the bar, e.g. "Estimate based on score & time".',
+                      '[momentum] Short note shown below the bar, e.g. "Estimate based on score & time".',
+                  },
+                  // infocard fields (prefixed to avoid collision with statpanel `title`)
+                  infocard_title: {
+                    type: 'string',
+                    description: '[infocard] Short title for the card (e.g. "Did you know?", "Speaker").',
+                  },
+                  infocard_body: {
+                    type: 'string',
+                    description: '[infocard] Main info text (1–3 sentences).',
+                  },
+                  infocard_accent: {
+                    type: 'string',
+                    enum: ['blue', 'green', 'orange', 'purple'],
+                    description:
+                      '[infocard] Accent color: blue (default), green (facts/tips), orange (warnings), purple (creative).',
+                  },
+                  // keypoints fields (prefixed to avoid collision with statpanel list pattern)
+                  kp_title: {
+                    type: 'string',
+                    description: '[keypoints] Optional header above the bullet list.',
+                  },
+                  kp_points: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 1,
+                    maxItems: 6,
+                    description: '[keypoints] 1–6 bullet point strings.',
+                  },
+                  // definition fields (prefixed to avoid ambiguity)
+                  def_term: {
+                    type: 'string',
+                    description: '[definition] The term or concept to define.',
+                  },
+                  def_definition: {
+                    type: 'string',
+                    description: '[definition] Clear concise explanation of the term.',
                   },
                 },
                 required: ['slot', 'widget_type'],
@@ -393,6 +466,16 @@ Call render_layout with the best matching layout.`
       // momentum (prefixed to avoid collision with scoreboard's `teams`)
       momentum_teams?: Array<{ name: string; probability: number }>
       momentum_note?: string
+      // infocard (prefixed to avoid collision with statpanel's `title`)
+      infocard_title?: string
+      infocard_body?: string
+      infocard_accent?: string
+      // keypoints (prefixed)
+      kp_title?: string
+      kp_points?: string[]
+      // definition (prefixed)
+      def_term?: string
+      def_definition?: string
     }>
   }
 
@@ -402,15 +485,52 @@ Call render_layout with the best matching layout.`
   const validNodes: Array<{ slot: string; zIndex?: number; widget: unknown }> = []
 
   for (const rawNode of rawInput.nodes ?? []) {
-    const { slot, zIndex, widget_type, momentum_teams, momentum_note, ...widgetFields } = rawNode
+    const {
+      slot, zIndex, widget_type,
+      momentum_teams, momentum_note,
+      infocard_title, infocard_body, infocard_accent,
+      kp_title, kp_points,
+      def_term, def_definition,
+      ...widgetFields
+    } = rawNode
 
-    // Build the widget object from the flat fields.
-    // For momentum, remap prefixed fields to their schema names.
-    const momentumExtras =
-      widget_type === 'momentum'
-        ? { teams: momentum_teams, note: momentum_note }
-        : {}
-    const widgetCandidate = { type: widget_type, ...widgetFields, ...momentumExtras }
+    // Build the widget object from the flat fields, remapping prefixed keys to schema names.
+    let widgetCandidate: Record<string, unknown>
+
+    switch (widget_type) {
+      case 'momentum':
+        widgetCandidate = {
+          type: 'momentum',
+          teams: momentum_teams,
+          note: momentum_note,
+        }
+        break
+      case 'infocard':
+        widgetCandidate = {
+          type: 'infocard',
+          title: infocard_title,
+          body: infocard_body,
+          accent: infocard_accent,
+        }
+        break
+      case 'keypoints':
+        widgetCandidate = {
+          type: 'keypoints',
+          title: kp_title,
+          points: kp_points,
+        }
+        break
+      case 'definition':
+        widgetCandidate = {
+          type: 'definition',
+          term: def_term,
+          definition: def_definition,
+        }
+        break
+      default:
+        // scoreboard, timer, statpanel, alert — field names match schema directly.
+        widgetCandidate = { type: widget_type, ...widgetFields }
+    }
 
     // Validate the widget with Zod.
     const widgetParsed = WidgetNodeSchema.safeParse(widgetCandidate)
@@ -457,8 +577,8 @@ Call render_layout with the best matching layout.`
 //
 //   STAGE 1 — Haiku filter (cheap, fast):
 //     Model : claude-haiku-4-5
-//     Task  : Answer a structured yes/no: "is something notable happening
-//             in the PRIMARY live match right now?"
+//     Task  : Answer a structured yes/no: "is something worth surfacing about
+//             the main content right now?"
 //     Output: { notable: boolean; reason: string }
 //     Cost  : Minimal — tiny tool, small max_tokens.
 //     Gate  : If notable === false → return { suggestion: null } immediately.
@@ -468,11 +588,10 @@ Call render_layout with the best matching layout.`
 //   STAGE 2 — Sonnet confirm + render (accurate, only when needed):
 //     Model : claude-sonnet-4-6
 //     Task  : Confirm the event is genuinely notable and produce the widget
-//             layout using the full hardened grounding rules (ignore tickers,
-//             other matches, picture-in-picture, etc.).
+//             layout using the full hardened grounding rules.
 //     Output: optional render_layout tool call.
-//     Cost  : Paid only when Haiku said YES — typically rare during a match.
-//             Sonnet's superior OCR accuracy avoids misreading ticker scores.
+//     Cost  : Paid only when Haiku said YES — typically rare.
+//             Sonnet's superior OCR accuracy avoids misreading on-screen text.
 //
 // ---------------------------------------------------------------------------
 
@@ -499,8 +618,12 @@ const RENDER_LAYOUT_INPUT_SCHEMA = {
           zIndex: { type: 'integer' },
           widget_type: {
             type: 'string',
-            enum: ['scoreboard', 'timer', 'statpanel', 'alert', 'momentum'],
+            enum: [
+              'scoreboard', 'timer', 'statpanel', 'alert', 'momentum',
+              'infocard', 'keypoints', 'definition',
+            ],
           },
+          // scoreboard
           teams: {
             type: 'array',
             items: {
@@ -515,8 +638,10 @@ const RENDER_LAYOUT_INPUT_SCHEMA = {
             maxItems: 2,
           },
           minute: { type: 'integer', minimum: 0 },
+          // timer
           durationSeconds: { type: 'integer', minimum: 1 },
           label: { type: 'string' },
+          // statpanel
           title: { type: 'string' },
           stats: {
             type: 'array',
@@ -531,11 +656,13 @@ const RENDER_LAYOUT_INPUT_SCHEMA = {
             minItems: 1,
             maxItems: 6,
           },
+          // alert
           message: { type: 'string' },
           tone: {
             type: 'string',
             enum: ['info', 'success', 'warning'],
           },
+          // momentum (prefixed)
           momentum_teams: {
             type: 'array',
             items: {
@@ -550,6 +677,24 @@ const RENDER_LAYOUT_INPUT_SCHEMA = {
             maxItems: 2,
           },
           momentum_note: { type: 'string' },
+          // infocard (prefixed)
+          infocard_title: { type: 'string' },
+          infocard_body: { type: 'string' },
+          infocard_accent: {
+            type: 'string',
+            enum: ['blue', 'green', 'orange', 'purple'],
+          },
+          // keypoints (prefixed)
+          kp_title: { type: 'string' },
+          kp_points: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            maxItems: 6,
+          },
+          // definition (prefixed)
+          def_term: { type: 'string' },
+          def_definition: { type: 'string' },
         },
         required: ['slot', 'widget_type'],
       },
@@ -559,27 +704,27 @@ const RENDER_LAYOUT_INPUT_SCHEMA = {
 }
 
 // Hardened grounding rules shared between Stage 2 detect and generate-with-image.
-// The PRIMARY match is the one being actively played in the MAIN video frame.
+// The PRIMARY content is what is being actively shown in the MAIN video frame.
 const DETECT_GROUNDING_RULES = `
-PRIMARY MATCH IDENTIFICATION:
-- The PRIMARY match is the one being actively played in the MAIN video frame (the large central video area).
-- Read ONLY the scorebug/score bug that belongs to the PRIMARY match: typically pinned top-left or bottom
-  of the main frame, tied to the live action you can see on the pitch.
-- DO NOT read scores or team names from picture-in-picture boxes, commentator webcam feeds, or any smaller inset.
+PRIMARY CONTENT IDENTIFICATION:
+- The PRIMARY content is what is being actively shown in the MAIN video frame (the large central video area).
+- For sport broadcasts: read ONLY the scorebug/score bug that belongs to the primary match — typically
+  pinned top-left or bottom of the main frame, tied to the live action visible in the frame.
+- DO NOT read data from picture-in-picture boxes, commentator webcam feeds, or any smaller inset.
 
 IGNORE these elements entirely — never use data from them:
-- The scrolling TICKER or results bar at the very bottom of the screen (shows OTHER match scores).
-- Scores, team names, or match results from any match OTHER than the primary live match.
-- "Up next", "Coming up", "Próximo partido", or any promo for a future match.
+- Scrolling tickers or results bars showing OTHER content or match scores.
+- Scores, team names, or results from any content OTHER than the primary live content.
+- "Up next", "Coming up", or any promo for future content.
 - League standings, tournament brackets, or historical result graphics.
 - Channel logos, sponsor banners, social media handles, watermarks.
 - Picture-in-picture boxes and commentator webcam feeds.
+- Any overlay or UI element that is NOT part of the main video content.
 
-If multiple scores are visible on screen, only the PRIMARY match's scorebug is authoritative.
-If you cannot confidently identify which score belongs to the primary live match, do NOT fabricate:
-return nothing (do not call render_layout).
+If multiple scores or content types are visible, only the PRIMARY content in the main frame is authoritative.
+If you cannot confidently identify the primary content, do NOT fabricate: return nothing (do not call render_layout).
 
-Use ONLY data visible in the screenshot. Do not apply prior knowledge of team names or scores.`
+Use ONLY data visible in the screenshot. Do not apply prior knowledge.`
 
 async function handleDetectMode(
   image: string | undefined,
@@ -608,20 +753,25 @@ async function handleDetectMode(
   }
 
   // -------------------------------------------------------------------------
-  // STAGE 1 — Haiku filter: cheap yes/no "is something notable happening?"
+  // STAGE 1 — Haiku filter: cheap yes/no "is something worth surfacing?"
   //
   // Model : claude-haiku-4-5 (fast, inexpensive — suited for high-frequency polling)
   // Tool  : check_notable — structured yes/no with short reason
   // Tokens: max_tokens 256 — we only need a tiny JSON object back
   // -------------------------------------------------------------------------
-  const stage1Instruction = `You are a sports broadcast monitor scanning for notable live events.
+  const stage1Instruction = `You are a video content monitor scanning for notable moments worth surfacing as an overlay.
 
-Look ONLY at the PRIMARY live match — the one being actively played in the MAIN video frame.
-Ignore the scrolling ticker at the bottom, any other match scores, picture-in-picture, webcams, and promos.
+Look ONLY at the PRIMARY content — what is being actively shown in the MAIN video frame.
+Ignore scrolling tickers, unrelated scores, picture-in-picture, webcams, and promos.
 
-Is a NOTABLE event happening in the PRIMARY live match RIGHT NOW?
-Notable events: goal just scored, red or yellow card shown, penalty awarded, VAR decision announced,
-significant score change, or other dramatic moment visible in the main frame.
+Is something NOTABLE happening in the PRIMARY content RIGHT NOW that would be worth surfacing as an overlay?
+
+Examples of notable moments (across different content types):
+- Sport: goal just scored, red or yellow card shown, penalty awarded, VAR decision, significant score change
+- Lecture/talk: a key definition shown, a pivotal slide, a graph or result being explained
+- Cooking: a critical step being performed, a technique being demonstrated
+- Gameplay: a boss fight started, a key item obtained, a notable game event
+- Any: a dramatic, educational, or clearly significant moment in the main video
 
 Call check_notable with your assessment. Be conservative: if you are unsure, answer notable: false.`
 
@@ -631,13 +781,13 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
     tools: [
       {
         name: 'check_notable',
-        description: 'Report whether a notable live event is happening in the PRIMARY match right now.',
+        description: 'Report whether something notable is happening in the PRIMARY content right now.',
         input_schema: {
           type: 'object' as const,
           properties: {
             notable: {
               type: 'boolean',
-              description: 'true if a notable event (goal, card, penalty, VAR, etc.) is happening in the primary match.',
+              description: 'true if a notable moment worth surfacing as an overlay is happening in the primary content.',
             },
             reason: {
               type: 'string',
@@ -677,21 +827,29 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
   //         can't be read confidently → no tool call → { suggestion: null }
   // Tokens: max_tokens 1024 — needs to produce a full widget layout
   // -------------------------------------------------------------------------
-  const stage2Instruction = `You are a sports broadcast monitor. Haiku flagged a potentially notable event.
+  const stage2Instruction = `You are a video content monitor. The fast filter flagged a potentially notable moment.
 Confirm whether it is genuinely notable and — if so — compose an appropriate overlay layout.
 ${DETECT_GROUNDING_RULES}
 
-ONLY call render_layout if there is a CONFIRMED NOTABLE event in the PRIMARY live match:
-- A goal just scored
-- A card shown (red or yellow)
-- A penalty awarded
-- A significant score change or milestone
-- A dramatic moment (VAR decision, injury, substitution shown on screen)
+ONLY call render_layout if there is a CONFIRMED NOTABLE moment in the PRIMARY content.
+
+For sport broadcasts, notable moments include:
+- A goal just scored, a card shown, a penalty awarded, a significant score change, a VAR decision
+
+For lectures and educational content:
+- A key definition or concept being explained, an important result or formula shown
+
+For cooking:
+- A critical technique or step being performed that is worth highlighting
+
+For gameplay:
+- A boss fight, a key achievement, or a dramatic in-game event
 
 If after your own careful read you conclude there is nothing genuinely notable, or you cannot confidently
-read the primary match data, do NOT call render_layout. Return nothing.
+read the primary content data, do NOT call render_layout. Return nothing.
 
-If you DO call render_layout, use only data from the PRIMARY match's scorebug / main-frame graphics.`
+If you DO call render_layout, choose the widget type appropriate for the content domain and use only
+data from the PRIMARY content in the main video frame.`
 
   const stage2Response = await client.messages.create({
     model: 'claude-sonnet-4-6', // Stage 2: accurate — only called when Haiku said YES
@@ -700,8 +858,8 @@ If you DO call render_layout, use only data from the PRIMARY match's scorebug / 
       {
         name: 'render_layout',
         description:
-          'Compose a layout of 1–3 overlay widgets for a confirmed notable live broadcast event. ' +
-          'Only call this when something genuinely notable is happening in the PRIMARY match.',
+          'Compose a layout of 1–3 overlay widgets for a confirmed notable moment in the video. ' +
+          'Only call this when something genuinely notable is happening in the PRIMARY content.',
         input_schema: RENDER_LAYOUT_INPUT_SCHEMA,
       },
     ],
@@ -734,18 +892,47 @@ If you DO call render_layout, use only data from the PRIMARY match's scorebug / 
       tone?: string
       momentum_teams?: Array<{ name: string; probability: number }>
       momentum_note?: string
+      infocard_title?: string
+      infocard_body?: string
+      infocard_accent?: string
+      kp_title?: string
+      kp_points?: string[]
+      def_term?: string
+      def_definition?: string
     }>
   }
 
   const validNodes: Array<{ slot: string; zIndex?: number; widget: unknown }> = []
 
   for (const rawNode of rawInput.nodes ?? []) {
-    const { slot, zIndex, widget_type, momentum_teams, momentum_note, ...widgetFields } = rawNode
-    const momentumExtras =
-      widget_type === 'momentum'
-        ? { teams: momentum_teams, note: momentum_note }
-        : {}
-    const widgetCandidate = { type: widget_type, ...widgetFields, ...momentumExtras }
+    const {
+      slot, zIndex, widget_type,
+      momentum_teams, momentum_note,
+      infocard_title, infocard_body, infocard_accent,
+      kp_title, kp_points,
+      def_term, def_definition,
+      ...widgetFields
+    } = rawNode
+
+    let widgetCandidate: Record<string, unknown>
+
+    switch (widget_type) {
+      case 'momentum':
+        widgetCandidate = { type: 'momentum', teams: momentum_teams, note: momentum_note }
+        break
+      case 'infocard':
+        widgetCandidate = { type: 'infocard', title: infocard_title, body: infocard_body, accent: infocard_accent }
+        break
+      case 'keypoints':
+        widgetCandidate = { type: 'keypoints', title: kp_title, points: kp_points }
+        break
+      case 'definition':
+        widgetCandidate = { type: 'definition', term: def_term, definition: def_definition }
+        break
+      default:
+        widgetCandidate = { type: widget_type, ...widgetFields }
+    }
+
     const widgetParsed = WidgetNodeSchema.safeParse(widgetCandidate)
     if (!widgetParsed.success) {
       console.warn('[overlai detect] Dropping invalid node:', widgetParsed.error.message)

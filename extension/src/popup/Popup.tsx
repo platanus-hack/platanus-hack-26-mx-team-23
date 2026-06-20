@@ -156,7 +156,7 @@ export function Popup() {
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder='e.g. "who&apos;s winning?"'
+          placeholder='Ask about this video...'
           className="flex-1 px-3 py-2 rounded-lg bg-gray-800 text-white text-sm border border-gray-700 focus:outline-none focus:border-yellow-400"
           disabled={status === 'listening' || status === 'sending'}
         />

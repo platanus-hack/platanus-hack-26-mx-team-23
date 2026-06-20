@@ -63,6 +63,14 @@ function deriveLayoutSummary(layout: Layout): string {
         const [h, a] = w.teams
         return `momentum: ${h.name} ${h.probability}% vs ${a.name} ${a.probability}%`
       }
+      case 'infocard':
+        return `infocard: ${w.title} — ${w.body.slice(0, 60)}`
+      case 'keypoints': {
+        const title = w.title ? `${w.title}: ` : ''
+        return `keypoints: ${title}${w.points.slice(0, 3).join('; ')}`
+      }
+      case 'definition':
+        return `definition: ${w.term}`
       default:
         return (w as { type: string }).type
     }
@@ -91,12 +99,24 @@ const REVEAL_INTERVAL_MS = 200
 
 // Reveal order: widget types listed here enter first (ascending index = earlier).
 // Types not listed fall after all listed types, then sorted by ascending zIndex.
-const REVEAL_ORDER: string[] = ['scoreboard', 'momentum', 'statpanel', 'timer', 'alert']
+// Generic widgets (infocard, keypoints, definition) reveal after sports-specific ones.
+const REVEAL_ORDER: string[] = [
+  'scoreboard',
+  'momentum',
+  'statpanel',
+  'timer',
+  'alert',
+  'infocard',
+  'keypoints',
+  'definition',
+]
 
 // ---------------------------------------------------------------------------
 // Widget priority: determines which widget "wins" a slot conflict and which
 // gets relocated. Higher number = higher priority = stays in its slot.
-// Priority order: alert > scoreboard > momentum > timer > statpanel
+// Priority order: alert > scoreboard > momentum > timer > statpanel > generic widgets
+// Generic widgets (infocard, keypoints, definition) are lower priority than alert
+// but higher priority than zero (unknown types).
 // ---------------------------------------------------------------------------
 const WIDGET_PRIORITY: Record<string, number> = {
   alert:      40,
@@ -104,6 +124,9 @@ const WIDGET_PRIORITY: Record<string, number> = {
   momentum:   25,
   timer:      20,
   statpanel:  10,
+  infocard:    8,
+  keypoints:   7,
+  definition:  6,
 }
 
 function widgetPriority(type: string): number {
@@ -429,6 +452,9 @@ function layoutSignature(layout: Layout): string {
       if (w.type === 'timer') return `timer:${w.durationSeconds}`
       if (w.type === 'statpanel') return `statpanel:${w.title ?? ''}:${w.stats.map((s) => s.label).join(',')}`
       if (w.type === 'momentum') return `momentum:${w.teams.map((t) => `${t.name}:${t.probability}`).join(',')}`
+      if (w.type === 'infocard') return `infocard:${w.title}`
+      if (w.type === 'keypoints') return `keypoints:${(w.title ?? '')}:${w.points.join(',')}`
+      if (w.type === 'definition') return `definition:${w.term}`
       return (w as { type: string }).type
     })
     .sort()

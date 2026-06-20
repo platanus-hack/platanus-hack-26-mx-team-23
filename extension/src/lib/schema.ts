@@ -62,13 +62,47 @@ export const MomentumSchema = z.object({
 
 export type Momentum = z.infer<typeof MomentumSchema>
 
-// --- Widget node (discriminated union of the 5 widget types) ---
+// --- InfoCard ---
+// A titled info card for explaining anything: facts, context, trivia, general info.
+export const InfoCardSchema = z.object({
+  type: z.literal('infocard'),
+  title: z.string(),
+  body: z.string(),
+  accent: z.enum(['blue', 'green', 'orange', 'purple']).optional(),
+})
+
+export type InfoCard = z.infer<typeof InfoCardSchema>
+
+// --- KeyPoints ---
+// A bulleted list — recipe steps, lecture key points, match highlights, summaries.
+export const KeyPointsSchema = z.object({
+  type: z.literal('keypoints'),
+  title: z.string().optional(),
+  points: z.array(z.string()).min(1).max(6),
+})
+
+export type KeyPoints = z.infer<typeof KeyPointsSchema>
+
+// --- Definition ---
+// A term + explanation card for tutorials and lectures.
+export const DefinitionSchema = z.object({
+  type: z.literal('definition'),
+  term: z.string(),
+  definition: z.string(),
+})
+
+export type Definition = z.infer<typeof DefinitionSchema>
+
+// --- Widget node (discriminated union of the 8 widget types) ---
 export const WidgetNodeSchema = z.discriminatedUnion('type', [
   ScoreboardSchema,
   TimerSchema,
   StatPanelSchema,
   AlertSchema,
   MomentumSchema,
+  InfoCardSchema,
+  KeyPointsSchema,
+  DefinitionSchema,
 ])
 
 export type WidgetNode = z.infer<typeof WidgetNodeSchema>
@@ -76,6 +110,7 @@ export type WidgetNode = z.infer<typeof WidgetNodeSchema>
 // Keep the old name as an alias for backward compatibility inside the extension.
 export const WidgetSchema = WidgetNodeSchema
 export type Widget = WidgetNode
+
 
 // --- Slot positions ---
 // 8 fixed regions relative to the video element.
