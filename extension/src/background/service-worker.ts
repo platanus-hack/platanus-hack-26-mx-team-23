@@ -4,7 +4,10 @@
 //      returning a suggestion (or null) to the requesting content script.
 //   2. Lifecycle logging.
 
-const BACKEND_BASE_URL = 'http://localhost:3000'
+// Backend base URL — set VITE_BACKEND_BASE_URL at build time (e.g. the Vercel URL).
+// Falls back to localhost for local development.
+const BACKEND_BASE_URL =
+  import.meta.env.VITE_BACKEND_BASE_URL ?? 'http://localhost:3000'
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Overlai] Extension installed — background service worker ready.')

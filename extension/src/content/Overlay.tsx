@@ -10,8 +10,10 @@ import {
 } from '../lib/schema'
 import { getWidget } from '../lib/registry'
 
-// Single constant — easy to swap for production URL.
-const BACKEND_BASE_URL = 'http://localhost:3000'
+// Backend base URL — set VITE_BACKEND_BASE_URL at build time (e.g. the Vercel URL).
+// Falls back to localhost for local development.
+const BACKEND_BASE_URL =
+  import.meta.env.VITE_BACKEND_BASE_URL ?? 'http://localhost:3000'
 
 // ---------------------------------------------------------------------------
 // Session history — Features E + 7
