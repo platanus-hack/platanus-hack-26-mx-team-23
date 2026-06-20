@@ -31,16 +31,19 @@ export function Overlay() {
   // Listen for intent queries dispatched by the content script.
   useEffect(() => {
     async function handleQuery(event: Event) {
-      const { text } = (event as CustomEvent<{ text: string }>).detail
+      const { text, image } = (event as CustomEvent<{ text: string; image?: string }>).detail
       if (!text) return
 
       setState({ status: 'loading' })
 
       try {
+        const body: { text: string; image?: string } = { text }
+        if (image) body.image = image
+
         const response = await fetch(`${BACKEND_BASE_URL}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify(body),
         })
 
         if (!response.ok) {

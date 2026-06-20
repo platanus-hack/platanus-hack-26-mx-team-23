@@ -3,10 +3,58 @@ import { recognizeOnce, isSpeechSupported } from '../lib/voice'
 
 type Status = 'idle' | 'listening' | 'sending' | 'done' | 'error'
 
-async function sendTextToActiveTab(text: string): Promise<void> {
+/** Max width (px) for the downscaled screenshot sent to the backend. */
+const SCREENSHOT_MAX_WIDTH = 1280
+
+/**
+ * Downscale a data URL to at most SCREENSHOT_MAX_WIDTH wide, re-encoding as JPEG.
+ * If the image is already narrower, it is returned unchanged.
+ */
+async function downscaleDataUrl(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      if (img.width <= SCREENSHOT_MAX_WIDTH) {
+        resolve(dataUrl)
+        return
+      }
+      const scale = SCREENSHOT_MAX_WIDTH / img.width
+      const canvas = document.createElement('canvas')
+      canvas.width = SCREENSHOT_MAX_WIDTH
+      canvas.height = Math.round(img.height * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        resolve(dataUrl)
+        return
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      resolve(canvas.toDataURL('image/jpeg', 0.8))
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
+}
+
+/**
+ * Capture the visible tab as a JPEG data URL.
+ * Returns null if capture is not available (e.g. protected page).
+ */
+async function captureTab(): Promise<string | null> {
+  try {
+    const raw = await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality: 70 })
+    return await downscaleDataUrl(raw)
+  } catch {
+    // captureVisibleTab can fail on chrome:// pages, extension pages, etc.
+    return null
+  }
+}
+
+async function sendToActiveTab(text: string, image: string | null): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) throw new Error('No active tab found')
-  await chrome.tabs.sendMessage(tab.id, { type: 'OVERLAI_TEXT', text })
+  const message: { type: string; text: string; image?: string } = { type: 'OVERLAI_TEXT', text }
+  if (image) message.image = image
+  await chrome.tabs.sendMessage(tab.id, message)
 }
 
 export function Popup() {
@@ -41,7 +89,10 @@ export function Popup() {
     setStatus('sending')
     setStatusMsg(`Sending: "${query}"`)
     try {
-      await sendTextToActiveTab(query)
+      // Capture a screenshot of the visible tab so the backend can read on-screen graphics.
+      // Falls back to text-only if the page is protected or capture fails.
+      const image = await captureTab()
+      await sendToActiveTab(query, image)
       setStatus('done')
       setStatusMsg('Widget sent to page!')
     } catch (err) {

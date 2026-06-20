@@ -36,13 +36,13 @@ if (document.readyState === 'loading') {
   mount()
 }
 
-// Listen for text messages from the popup.
-// The popup calls chrome.tabs.sendMessage({ type: 'OVERLAI_TEXT', text }).
+// Listen for text (and optional screenshot) messages from the popup.
+// The popup calls chrome.tabs.sendMessage({ type: 'OVERLAI_TEXT', text, image? }).
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'OVERLAI_TEXT' && typeof message.text === 'string') {
+    const detail: { text: string; image?: string } = { text: message.text }
+    if (typeof message.image === 'string') detail.image = message.image
     // Dispatch a custom event that Overlay.tsx can listen to.
-    window.dispatchEvent(
-      new CustomEvent('overlai:query', { detail: { text: message.text } })
-    )
+    window.dispatchEvent(new CustomEvent('overlai:query', { detail }))
   }
 })
