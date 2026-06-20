@@ -1,63 +1,155 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ScoreboardWidget } from '../widgets/Scoreboard'
+import { WidgetSchema, type Widget } from '../lib/schema'
+import { getWidget } from '../lib/registry'
 
-// Placeholder widget data for Phase 0 visual verification
-const PLACEHOLDER_DATA = {
-  type: 'scoreboard' as const,
-  teams: [
-    { name: 'Madrid', score: 2 },
-    { name: 'Barça', score: 1 },
-  ],
-  minute: 67,
-}
+// Single constant — easy to swap for production URL.
+const BACKEND_BASE_URL = 'http://localhost:3000'
+
+type OverlayState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'widget'; data: Widget }
+  | { status: 'error'; message: string }
 
 export function Overlay() {
   const [videoRect, setVideoRect] = useState<DOMRect | null>(null)
+  const [state, setState] = useState<OverlayState>({ status: 'idle' })
 
+  // Keep videoRect in sync with the page <video> element.
   useEffect(() => {
     function findVideo() {
       const video = document.querySelector('video')
-      if (video) {
-        setVideoRect(video.getBoundingClientRect())
-      }
+      if (video) setVideoRect(video.getBoundingClientRect())
     }
 
     findVideo()
-    // Re-check periodically (video may load after mount)
     const interval = setInterval(findVideo, 2000)
     return () => clearInterval(interval)
   }, [])
 
+  // Listen for intent queries dispatched by the content script.
+  useEffect(() => {
+    async function handleQuery(event: Event) {
+      const { text } = (event as CustomEvent<{ text: string }>).detail
+      if (!text) return
+
+      setState({ status: 'loading' })
+
+      try {
+        const response = await fetch(`${BACKEND_BASE_URL}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        })
+
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}))
+          throw new Error(
+            `Backend returned ${response.status}: ${errBody.error ?? 'Unknown error'}`
+          )
+        }
+
+        const rawData = await response.json()
+
+        // Validate with Zod before rendering — safety net for unexpected LLM output.
+        const parsed = WidgetSchema.safeParse(rawData)
+        if (!parsed.success) {
+          throw new Error(`Invalid widget schema from backend: ${parsed.error.message}`)
+        }
+
+        setState({ status: 'widget', data: parsed.data })
+      } catch (err) {
+        setState({
+          status: 'error',
+          message: err instanceof Error ? err.message : 'Unknown error',
+        })
+        // Auto-dismiss error after 5 seconds.
+        setTimeout(() => setState({ status: 'idle' }), 5000)
+      }
+    }
+
+    window.addEventListener('overlai:query', handleQuery)
+    return () => window.removeEventListener('overlai:query', handleQuery)
+  }, [])
+
+  // Widget anchor: top-left corner of the <video>, or fixed fallback.
+  const anchorTop = videoRect ? videoRect.top + 16 : 16
+  const anchorLeft = videoRect ? videoRect.left + 16 : 16
+
   return (
-    // pointer-events: none on parent — individual widgets enable clicks as needed
     <div style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'relative' }}>
-      <AnimatePresence>
-        <div
-          style={{
-            position: 'absolute',
-            top: videoRect ? videoRect.top + 16 : 16,
-            left: videoRect ? videoRect.left + 16 : 16,
-            pointerEvents: 'none',
-          }}
-        >
-          {/* Phase 0 placeholder: always show scoreboard for visual verification */}
-          <ScoreboardWidget data={PLACEHOLDER_DATA} />
-          <div
-            style={{
-              marginTop: 8,
-              background: 'rgba(0,0,0,0.5)',
-              color: '#aaa',
-              fontSize: 11,
-              padding: '4px 8px',
-              borderRadius: 6,
-              fontFamily: 'monospace',
-            }}
-          >
-            overlai overlay — phase 0
-          </div>
-        </div>
-      </AnimatePresence>
+      <div
+        style={{
+          position: 'absolute',
+          top: anchorTop,
+          left: anchorLeft,
+          pointerEvents: 'none',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        {/* Loading indicator */}
+        <AnimatePresence>
+          {state.status === 'loading' && (
+            <div
+              style={{
+                background: 'rgba(0,0,0,0.6)',
+                color: '#facc15',
+                fontSize: 12,
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontFamily: 'monospace',
+              }}
+            >
+              Building widget...
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Error message */}
+        <AnimatePresence>
+          {state.status === 'error' && (
+            <div
+              style={{
+                background: 'rgba(200,0,0,0.7)',
+                color: '#fff',
+                fontSize: 12,
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontFamily: 'monospace',
+                maxWidth: 320,
+              }}
+            >
+              {state.message}
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Rendered widget */}
+        <AnimatePresence mode="wait">
+          {state.status === 'widget' && (() => {
+            const WidgetComponent = getWidget(state.data.type)
+            if (!WidgetComponent) {
+              return (
+                <div
+                  style={{
+                    background: 'rgba(0,0,0,0.5)',
+                    color: '#aaa',
+                    fontSize: 11,
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                  }}
+                >
+                  Unknown widget type: {state.data.type}
+                </div>
+              )
+            }
+            return <WidgetComponent key={state.data.type} data={state.data} />
+          })()}
+        </AnimatePresence>
+      </div>
     </div>
   )
 }

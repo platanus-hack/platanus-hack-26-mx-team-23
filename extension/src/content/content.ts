@@ -1,9 +1,12 @@
-// Content script: injects the Overlai overlay React root over the page <video>.
-// This runs in the context of every page matched by manifest content_scripts.
+// Content script: injects the Overlai overlay React root over the page <video>
+// and handles messages from the popup.
 
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Overlay } from './Overlay'
+
+// The overlay root element (created once).
+let overlayRoot: ReactDOM.Root | null = null
 
 function mount() {
   // Avoid double-mounting
@@ -22,13 +25,24 @@ function mount() {
   `
   document.body.appendChild(container)
 
-  const root = ReactDOM.createRoot(container)
-  root.render(React.createElement(Overlay))
+  overlayRoot = ReactDOM.createRoot(container)
+  overlayRoot.render(React.createElement(Overlay))
 }
 
-// Mount immediately if DOM is ready, otherwise wait
+// Mount immediately if DOM is ready, otherwise wait.
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', mount)
 } else {
   mount()
 }
+
+// Listen for text messages from the popup.
+// The popup calls chrome.tabs.sendMessage({ type: 'OVERLAI_TEXT', text }).
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'OVERLAI_TEXT' && typeof message.text === 'string') {
+    // Dispatch a custom event that Overlay.tsx can listen to.
+    window.dispatchEvent(
+      new CustomEvent('overlai:query', { detail: { text: message.text } })
+    )
+  }
+})
