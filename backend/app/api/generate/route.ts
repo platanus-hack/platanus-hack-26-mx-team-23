@@ -1093,6 +1093,20 @@ ONLY call render_layout if there is a CONFIRMED NOTABLE moment in the PRIMARY co
 For sport broadcasts, notable moments include:
 - A goal just scored, a card shown, a penalty awarded, a significant score change, a VAR decision
 
+IMPORTANT — Sport play-by-play narration: when you confirm a notable sport moment, you MUST include
+an alert widget whose message is a short Spanish play description (10 words or fewer). Examples:
+  - Goal: "Gol de {team}, minuto {min}" (e.g. "Gol de Argentina, minuto 34")
+  - Yellow card: "Tarjeta amarilla para {team}" (e.g. "Tarjeta amarilla para Francia")
+  - Red card: "Tarjeta roja para {team}"
+  - Penalty: "Penal para {team}" (e.g. "Penal para Brasil")
+  - VAR decision: "Revisión VAR — {brief outcome}"
+  - Own goal: "Autogol de {team}"
+  - Significant score change / general notable: "{team} {score} - {team} {score}, minuto {min}"
+Keep the alert message concise. This message will be read aloud to the viewer for play-by-play commentary.
+Always set tone: "success" for goals/team advantages, "warning" for cards/penalties, "info" for VAR/other events.
+You may add additional widgets (scoreboard, statpanel) alongside the alert, but the alert is REQUIRED for
+any confirmed sport notable moment so the narration engine can read it.
+
 For lectures and educational content:
 - A key definition or concept being explained, an important result or formula shown
 
