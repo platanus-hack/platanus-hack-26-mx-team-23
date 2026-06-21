@@ -615,9 +615,6 @@ function resolveOverlapsForInstances(
   return result
 }
 
-// Auto-dismiss timeout for proactive suggestions (ms).
-const SUGGESTION_AUTO_DISMISS_MS = 12000
-
 // Counter for generating stable instance IDs.
 let instanceCounter = 0
 
@@ -802,9 +799,6 @@ export function Overlay() {
   // Signature of the last proactive suggestion shown — used to skip duplicate detections.
   const lastSuggestionSignatureRef = useRef<string>('')
 
-  // Timer ref for auto-dismissing proactive suggestions.
-  const suggestionDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   // Keep videoRect in sync with the page <video> element.
   useEffect(() => {
     function findVideo() {
@@ -816,14 +810,6 @@ export function Overlay() {
     const interval = setInterval(findVideo, 2000)
     return () => clearInterval(interval)
   }, [])
-
-  // Helper: clear the proactive auto-dismiss timer.
-  function clearSuggestionTimer() {
-    if (suggestionDismissTimerRef.current !== null) {
-      clearTimeout(suggestionDismissTimerRef.current)
-      suggestionDismissTimerRef.current = null
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Accumulate new layout nodes into the instances list.
@@ -991,9 +977,8 @@ export function Overlay() {
   // Close a single widget instance by ID.
   // userInitiated=true (default) means the USER clicked the close button —
   // the widget's signature is added to dismissedSignatures so watch mode
-  // cannot re-open it. userInitiated=false is used by the 12-second
-  // auto-dismiss timer — the user never asked to suppress it, so we do NOT
-  // add it to dismissedSignatures.
+  // cannot re-open it. Proactive instances also add their type to
+  // dismissedAutoTypes so the watch loop suppresses that type going forward.
   const closeInstance = useCallback((id: string, userInitiated = true) => {
     setInstances((prev) => {
       if (userInitiated) {
@@ -1003,8 +988,8 @@ export function Overlay() {
           dismissedSignatures.add(sig)
           // If the closed widget was proactive, suppress its TYPE so the watch
           // loop cannot re-open a same-type widget (even under a different title
-          // or language). The 12s auto-dismiss does NOT set this — the user never
-          // asked to suppress the type, so watch mode should still surface it.
+          // or language). Only user-initiated closes add to dismissedAutoTypes;
+          // "Clear all" resets both sets so watch mode gets a clean slate.
           if (inst.proactive) {
             dismissedAutoTypes.add(inst.widget.type)
           }
@@ -1048,9 +1033,8 @@ export function Overlay() {
       const { text, image } = (event as CustomEvent<{ text: string; image?: string }>).detail
       if (!text) return
 
-      // Manual query takes precedence — clear any active proactive auto-dismiss.
+      // Manual query takes precedence — reset the proactive dedup signature.
       lastSuggestionSignatureRef.current = ''
-      clearSuggestionTimer()
 
       setStatusState({ status: 'loading' })
 
@@ -1128,33 +1112,9 @@ export function Overlay() {
       const sig = layoutSignature(normalized)
       if (sig === lastSuggestionSignatureRef.current) return
 
-      // Apply the new suggestion.
+      // Apply the new suggestion. Proactive widgets persist until the user
+      // closes them (X button → adds type to dismissedAutoTypes) or "Clear all".
       lastSuggestionSignatureRef.current = sig
-      clearSuggestionTimer()
-
-      // Auto-dismiss proactive widgets after SUGGESTION_AUTO_DISMISS_MS.
-      // This is a timer-driven dismiss (NOT user-initiated), so dismissed
-      // signatures are NOT added to dismissedSignatures — watch mode can
-      // surface these cards again on the next detection cycle.
-      const incomingSigs = new Set(normalized.nodes.map((n) => widgetSignature(n)))
-      suggestionDismissTimerRef.current = setTimeout(() => {
-        lastSuggestionSignatureRef.current = ''
-        setInstances((prev) => {
-          // Remove only instances that were proactive AND match the dismissed layout.
-          const toRemove = prev
-            .filter((i) => i.proactive && incomingSigs.has(widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex })))
-            .map((i) => i.id)
-          if (toRemove.length === 0) return prev
-          setRevealedIds((r) => {
-            const next = new Set(r)
-            toRemove.forEach((id) => next.delete(id))
-            return next
-          })
-          toRemove.forEach((id) => measureRefs.current.delete(id))
-          // Auto-dismiss: do NOT add signatures to dismissedSignatures.
-          return prev.filter((i) => !toRemove.includes(i.id))
-        })
-      }, SUGGESTION_AUTO_DISMISS_MS)
 
       accumulateLayout(normalized, true)
     }
@@ -1167,7 +1127,6 @@ export function Overlay() {
   // Clean up timers on unmount.
   useEffect(() => {
     return () => {
-      clearSuggestionTimer()
       if (revealTimerRef.current !== null) {
         clearInterval(revealTimerRef.current)
         revealTimerRef.current = null
@@ -1460,7 +1419,6 @@ export function Overlay() {
               dismissedSignatures.clear()
               dismissedAutoTypes.clear()
               lastSuggestionSignatureRef.current = ''
-              clearSuggestionTimer()
             }}
             style={{
               position: 'fixed',
