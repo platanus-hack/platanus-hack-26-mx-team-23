@@ -1,4 +1,4 @@
-// Content script: injects the Overlai overlay React root over the page <video>
+// Content script: injects the Klai overlay React root over the page <video>
 // and handles messages from the popup.
 
 import React from 'react'
@@ -30,10 +30,10 @@ function startWatchMode(): void {
     detectBusy = true
 
     try {
-      const suggestion = await chrome.runtime.sendMessage({ type: 'OVERLAI_DETECT' })
+      const suggestion = await chrome.runtime.sendMessage({ type: 'KLAI_DETECT' })
       if (suggestion !== null && suggestion !== undefined) {
         // Dispatch a custom event so Overlay.tsx can handle it.
-        window.dispatchEvent(new CustomEvent('overlai:suggestion', { detail: suggestion }))
+        window.dispatchEvent(new CustomEvent('klai:suggestion', { detail: suggestion }))
       }
     } catch {
       // Runtime may be unavailable briefly during extension reload.
@@ -42,7 +42,7 @@ function startWatchMode(): void {
     }
   }, WATCH_INTERVAL_MS)
 
-  console.log('[Overlai] Watch mode started (interval %dms)', WATCH_INTERVAL_MS)
+  console.log('[Klai] Watch mode started (interval %dms)', WATCH_INTERVAL_MS)
 }
 
 function stopWatchMode(): void {
@@ -50,7 +50,7 @@ function stopWatchMode(): void {
     clearInterval(watchInterval)
     watchInterval = null
     detectBusy = false
-    console.log('[Overlai] Watch mode stopped')
+    console.log('[Klai] Watch mode stopped')
   }
 }
 
@@ -62,10 +62,10 @@ let overlayRoot: ReactDOM.Root | null = null
 
 function mount() {
   // Avoid double-mounting
-  if (document.getElementById('overlai-root')) return
+  if (document.getElementById('klai-root')) return
 
   const container = document.createElement('div')
-  container.id = 'overlai-root'
+  container.id = 'klai-root'
   container.style.cssText = `
     position: fixed;
     top: 0;
@@ -94,14 +94,14 @@ if (document.readyState === 'loading') {
 
 chrome.runtime.onMessage.addListener((message) => {
   // Manual query from popup (text + optional screenshot).
-  if (message?.type === 'OVERLAI_TEXT' && typeof message.text === 'string') {
+  if (message?.type === 'KLAI_TEXT' && typeof message.text === 'string') {
     const detail: { text: string; image?: string } = { text: message.text }
     if (typeof message.image === 'string') detail.image = message.image
-    window.dispatchEvent(new CustomEvent('overlai:query', { detail }))
+    window.dispatchEvent(new CustomEvent('klai:query', { detail }))
   }
 
   // Watch mode toggle from popup.
-  if (message?.type === 'OVERLAI_WATCH' && typeof message.enabled === 'boolean') {
+  if (message?.type === 'KLAI_WATCH' && typeof message.enabled === 'boolean') {
     if (message.enabled) {
       startWatchMode()
     } else {

@@ -52,7 +52,7 @@ async function captureTab(): Promise<string | null> {
 async function sendToActiveTab(text: string, image: string | null): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) throw new Error('No active tab found')
-  const message: { type: string; text: string; image?: string } = { type: 'OVERLAI_TEXT', text }
+  const message: { type: string; text: string; image?: string } = { type: 'KLAI_TEXT', text }
   if (image) message.image = image
   await chrome.tabs.sendMessage(tab.id, message)
 }
@@ -83,7 +83,7 @@ export function Popup() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, { type: 'OVERLAI_WATCH', enabled: next })
+        chrome.tabs.sendMessage(tab.id, { type: 'KLAI_WATCH', enabled: next })
       }
     } catch {
       // Tab may not have the content script (e.g. chrome:// pages) — ignore.
@@ -136,7 +136,7 @@ export function Popup() {
 
   return (
     <div className="w-72 p-4 bg-gray-900 text-white font-sans">
-      <h1 className="text-lg font-bold mb-1 text-yellow-400">Overlai</h1>
+      <h1 className="text-lg font-bold mb-1 text-yellow-400">Klai</h1>
       <p className="text-xs text-gray-400 mb-4">Voice-driven overlay engine</p>
 
       {/* Mic button — only shown when speech is available */}

@@ -149,4 +149,4 @@ export type Layout = z.infer<typeof LayoutSchema>
 // --- Top-level response: single widget (back-compat) OR a layout ---
 export const ResponseSchema = z.union([WidgetNodeSchema, LayoutSchema])
 
-export type OverlaiResponse = z.infer<typeof ResponseSchema>
+export type KlaiResponse = z.infer<typeof ResponseSchema>

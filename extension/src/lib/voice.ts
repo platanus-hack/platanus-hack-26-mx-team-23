@@ -1,4 +1,4 @@
-// Web Speech API wrapper for Overlai.
+// Web Speech API wrapper for Klai.
 // Gracefully degrades: returns null from start() if the browser does not support it.
 
 export type VoiceResult =

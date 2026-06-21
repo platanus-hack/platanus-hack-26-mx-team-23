@@ -620,8 +620,8 @@ export function Overlay() {
       }
     }
 
-    window.addEventListener('overlai:query', handleQuery)
-    return () => window.removeEventListener('overlai:query', handleQuery)
+    window.addEventListener('klai:query', handleQuery)
+    return () => window.removeEventListener('klai:query', handleQuery)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -662,8 +662,8 @@ export function Overlay() {
       setState({ status: 'layout', data: normalized, proactive: true })
     }
 
-    window.addEventListener('overlai:suggestion', handleSuggestion)
-    return () => window.removeEventListener('overlai:suggestion', handleSuggestion)
+    window.addEventListener('klai:suggestion', handleSuggestion)
+    return () => window.removeEventListener('klai:suggestion', handleSuggestion)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -800,7 +800,7 @@ export function Overlay() {
       <AnimatePresence>
         {state.status === 'loading' && (
           <motion.div
-            key="overlai-loading"
+            key="klai-loading"
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
@@ -827,7 +827,7 @@ export function Overlay() {
       <AnimatePresence>
         {state.status === 'error' && (
           <motion.div
-            key="overlai-error"
+            key="klai-error"
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
@@ -932,7 +932,7 @@ export function Overlay() {
       <AnimatePresence>
         {state.status === 'layout' && state.proactive && (
           <motion.div
-            key="overlai-auto-chip"
+            key="klai-auto-chip"
             initial={{ opacity: 0, scale: 0.85 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.85 }}
@@ -980,7 +980,7 @@ export function Overlay() {
 
           // Skip nodes whose widget type is not in the registry (graceful per-node fallback).
           if (!WidgetComponent) {
-            console.warn('[overlai] Unknown widget type in layout node:', node.widget.type)
+            console.warn('[klai] Unknown widget type in layout node:', node.widget.type)
             return null
           }
 

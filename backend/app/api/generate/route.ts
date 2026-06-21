@@ -10,7 +10,7 @@ const FALLBACK_LAYOUT = {
       slot: 'top-center' as const,
       widget: {
         type: 'infocard' as const,
-        title: 'Overlai',
+        title: 'Klai',
         body: 'No API key configured. Add ANTHROPIC_API_KEY to your .env.local file.',
         accent: 'blue' as const,
       },
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
     }
     console.warn(
-      '[overlai] ANTHROPIC_API_KEY is not set — returning hardcoded fallback layout.'
+      '[klai] ANTHROPIC_API_KEY is not set — returning hardcoded fallback layout.'
     )
     return Response.json(FALLBACK_LAYOUT, { headers: CORS_HEADERS })
   }
@@ -536,7 +536,7 @@ Call render_layout with the best matching layout.`
     const widgetParsed = WidgetNodeSchema.safeParse(widgetCandidate)
     if (!widgetParsed.success) {
       console.warn(
-        '[overlai] Dropping invalid node (widget_type=%s, slot=%s): %s',
+        '[klai] Dropping invalid node (widget_type=%s, slot=%s): %s',
         widget_type,
         slot,
         widgetParsed.error.message
@@ -560,7 +560,7 @@ Call render_layout with the best matching layout.`
   const layoutParsed = LayoutSchema.safeParse(layoutCandidate)
 
   if (!layoutParsed.success) {
-    console.error('[overlai] Layout Zod validation failed:', layoutParsed.error)
+    console.error('[klai] Layout Zod validation failed:', layoutParsed.error)
     return Response.json(
       { error: 'Layout schema validation failed', details: layoutParsed.error },
       { status: 502, headers: CORS_HEADERS }
@@ -806,12 +806,12 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
   const stage1Tool = stage1Response.content.find((b) => b.type === 'tool_use')
   if (!stage1Tool || stage1Tool.type !== 'tool_use') {
     // Unexpected — treat as non-notable to fail safe.
-    console.warn('[overlai detect] Stage 1 did not return check_notable — skipping')
+    console.warn('[klai detect] Stage 1 did not return check_notable — skipping')
     return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
   }
 
   const stage1Input = stage1Tool.input as { notable: boolean; reason: string }
-  console.log('[overlai detect] Stage 1 (haiku):', stage1Input.notable, '—', stage1Input.reason)
+  console.log('[klai detect] Stage 1 (haiku):', stage1Input.notable, '—', stage1Input.reason)
 
   // Gate: if Haiku says nothing notable, stop here — no Sonnet call.
   if (!stage1Input.notable) {
@@ -872,7 +872,7 @@ data from the PRIMARY content in the main video frame.`
 
   // No tool call = Sonnet decided it wasn't actually notable (or couldn't read it confidently).
   if (!stage2Tool || stage2Tool.type !== 'tool_use') {
-    console.log('[overlai detect] Stage 2 (sonnet) declined — not notable or unreadable')
+    console.log('[klai detect] Stage 2 (sonnet) declined — not notable or unreadable')
     return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
   }
 
@@ -935,7 +935,7 @@ data from the PRIMARY content in the main video frame.`
 
     const widgetParsed = WidgetNodeSchema.safeParse(widgetCandidate)
     if (!widgetParsed.success) {
-      console.warn('[overlai detect] Dropping invalid node:', widgetParsed.error.message)
+      console.warn('[klai detect] Dropping invalid node:', widgetParsed.error.message)
       continue
     }
     validNodes.push({ slot, zIndex, widget: widgetParsed.data })
@@ -949,10 +949,10 @@ data from the PRIMARY content in the main video frame.`
   const layoutParsed = LayoutSchema.safeParse(layoutCandidate)
 
   if (!layoutParsed.success) {
-    console.warn('[overlai detect] Layout validation failed:', layoutParsed.error)
+    console.warn('[klai detect] Layout validation failed:', layoutParsed.error)
     return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
   }
 
-  console.log('[overlai detect] Stage 2 (sonnet) confirmed notable — returning suggestion')
+  console.log('[klai detect] Stage 2 (sonnet) confirmed notable — returning suggestion')
   return Response.json({ suggestion: layoutParsed.data }, { headers: CORS_HEADERS })
 }

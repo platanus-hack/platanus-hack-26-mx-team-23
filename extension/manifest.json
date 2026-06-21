@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Overlai",
+  "name": "Klai",
   "version": "0.1.0",
   "description": "Voice-driven generative overlay engine for live video",
   "permissions": ["activeTab", "storage", "scripting"],
@@ -12,7 +12,7 @@
   },
   "action": {
     "default_popup": "index.html",
-    "default_title": "Overlai",
+    "default_title": "Klai",
     "default_icon": {
       "16": "icon-16.png",
       "48": "icon-48.png",

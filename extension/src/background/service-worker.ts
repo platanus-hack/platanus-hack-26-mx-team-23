@@ -1,6 +1,6 @@
 // Background service worker (Manifest V3)
 // Handles two responsibilities:
-//   1. OVERLAI_DETECT — captures the visible tab and calls the backend in detect mode,
+//   1. KLAI_DETECT — captures the visible tab and calls the backend in detect mode,
 //      returning a suggestion (or null) to the requesting content script.
 //   2. Lifecycle logging.
 
@@ -10,7 +10,7 @@ const BACKEND_BASE_URL =
   import.meta.env.VITE_BACKEND_BASE_URL ?? 'http://localhost:3000'
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Overlai] Extension installed — background service worker ready.')
+  console.log('[Klai] Extension installed — background service worker ready.')
 })
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ chrome.runtime.onMessage.addListener(
     sender: chrome.runtime.MessageSender,
     sendResponse: (response: unknown) => void,
   ) => {
-    if (message.type === 'OVERLAI_DETECT') {
+    if (message.type === 'KLAI_DETECT') {
       handleDetect(sender, sendResponse)
       // Return true = async response (channel stays open until sendResponse is called).
       return true
@@ -52,7 +52,7 @@ async function handleDetect(
     })
   } catch (err) {
     // Protected pages (chrome://, extension pages) — fail silently.
-    console.warn('[Overlai SW] captureVisibleTab failed:', err)
+    console.warn('[Klai SW] captureVisibleTab failed:', err)
     sendResponse(null)
     return
   }
@@ -66,7 +66,7 @@ async function handleDetect(
     })
 
     if (!res.ok) {
-      console.warn('[Overlai SW] Backend detect returned', res.status)
+      console.warn('[Klai SW] Backend detect returned', res.status)
       sendResponse(null)
       return
     }
@@ -75,7 +75,7 @@ async function handleDetect(
     // data.suggestion is null when nothing notable was detected.
     sendResponse(data.suggestion ?? null)
   } catch (err) {
-    console.warn('[Overlai SW] Detect fetch failed:', err)
+    console.warn('[Klai SW] Detect fetch failed:', err)
     sendResponse(null)
   }
 }
