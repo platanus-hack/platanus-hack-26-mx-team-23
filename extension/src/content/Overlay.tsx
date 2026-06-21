@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
+import { speak } from '../lib/speak'
 // Mascot image lives in public/ and is loaded via chrome.runtime.getURL so it
 // resolves to a chrome-extension:// URL inside the host page (a bundled import
 // would resolve relative to the host page and 404).
@@ -118,6 +119,72 @@ function deriveWidgetLabel(inst: WidgetInstance): string {
     default:
       return (w as { type: string }).type
   }
+}
+
+// ---------------------------------------------------------------------------
+// Narration helpers — build natural Spanish spoken phrases from widget data.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a short spoken phrase (Spanish) for a single widget.
+ * Returns an empty string for widget types with no meaningful narration.
+ */
+function buildSpokenPhrase(widget: WidgetNode): string {
+  switch (widget.type) {
+    case 'scoreboard': {
+      const [h, a] = widget.teams
+      const base = `${h.name} ${h.score}, ${a.name} ${a.score}`
+      return widget.minute !== undefined ? `${base}, minuto ${widget.minute}` : base
+    }
+    case 'momentum': {
+      const [h] = widget.teams
+      return `${h.name}, ${h.probability} por ciento de probabilidad de ganar`
+    }
+    case 'statpanel': {
+      const titlePart = widget.title ? `${widget.title}. ` : ''
+      const statsPart = widget.stats
+        .slice(0, 3)
+        .map((s) => `${s.label}: ${s.value}`)
+        .join(', ')
+      return `${titlePart}${statsPart}`
+    }
+    case 'timer': {
+      const secs = widget.durationSeconds
+      if (secs % 60 === 0) {
+        const mins = secs / 60
+        return `Temporizador de ${mins} ${mins === 1 ? 'minuto' : 'minutos'}`
+      }
+      return `Temporizador de ${secs} segundos`
+    }
+    case 'alert':
+      return widget.message
+    case 'infocard': {
+      const body = widget.body.length > 140 ? `${widget.body.slice(0, 137)}...` : widget.body
+      return `${widget.title}. ${body}`
+    }
+    case 'keypoints': {
+      const titlePart = widget.title ? `${widget.title}. ` : ''
+      const pointsPart = widget.points.slice(0, 3).join(', ')
+      return `${titlePart}${pointsPart}`
+    }
+    case 'definition': {
+      const def = widget.definition.length > 140
+        ? `${widget.definition.slice(0, 137)}...`
+        : widget.definition
+      return `${widget.term}. ${def}`
+    }
+    default:
+      return ''
+  }
+}
+
+/**
+ * Derive a stable content hash for a widget — changes when the meaningful data
+ * changes (score, stats, message, etc.) so we know whether to re-narrate.
+ * Uses JSON.stringify on the widget data; stable enough for this purpose.
+ */
+function widgetContentHash(widget: WidgetNode): string {
+  return JSON.stringify(widget)
 }
 
 /** Append a manual interaction to the session history, evicting the oldest if at cap. */
@@ -889,6 +956,21 @@ export function Overlay() {
 
   const [voiceState, setVoiceState] = useState<VoiceIndicatorState>('idle')
 
+  // Narration enabled/disabled — persisted in chrome.storage.local under 'narration'.
+  const [narrationEnabled, setNarrationEnabled] = useState(false)
+  // Ref mirror so accumulateLayout (a useCallback) always reads the latest value.
+  const narrationEnabledRef = useRef(false)
+  narrationEnabledRef.current = narrationEnabled
+  // Tracks the last content hash spoken per instance id.
+  // Used to prevent re-narrating the same widget data on every React re-render.
+  const lastSpokenHashRef = useRef<Map<string, string>>(new Map())
+  // Scratch list for narration ops, similar to the timer ops pattern.
+  // Each entry: { phrase, instanceId, hash }
+  const pendingNarrationOpsRef = useRef<Array<{ phrase: string; instanceId: string; hash: string }>>([])
+  // For the auto-scoreboard fill-the-gap narration: track last score hash so we
+  // only narrate when the score CHANGES, not on every poll tick.
+  const lastAutoScoreHashRef = useRef<string>('')
+
   // PlacementMap computed by the measure pass (keyed by instance ID).
   const [placements, setPlacements] = useState<PlacementMap>(new Map())
 
@@ -953,6 +1035,7 @@ export function Overlay() {
         return next
       })
       measureRefs.current.delete(id)
+      lastSpokenHashRef.current.delete(id)
     }, ALERT_AUTO_DISMISS_MS)
     alertTimersRef.current.set(id, timer)
   }, [])
@@ -982,6 +1065,7 @@ export function Overlay() {
         return next
       })
       measureRefs.current.delete(id)
+      lastSpokenHashRef.current.delete(id)
     }, GENERIC_AUTO_DISMISS_MS)
     genericTimersRef.current.set(id, timer)
   }, [])
@@ -1016,6 +1100,7 @@ export function Overlay() {
       // Reset the scratch lists before each call so we start clean.
       pendingAlertTimerOpsRef.current = []
       pendingGenericTimerOpsRef.current = []
+      pendingNarrationOpsRef.current = []
 
       setInstances((prev) => {
         const next = [...prev]
@@ -1056,6 +1141,14 @@ export function Overlay() {
                 // Non-alert update in place → reset the 60-second stale timer so an
                 // actively-updating card (e.g. live scoreboard) never expires while in use.
                 pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: true, reset: true })
+              }
+              // Narrate the updated widget if data changed.
+              const newHash = widgetContentHash(node.widget)
+              if (narrationEnabledRef.current && lastSpokenHashRef.current.get(updatedId) !== newHash) {
+                const phrase = buildSpokenPhrase(node.widget)
+                if (phrase) {
+                  pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
+                }
               }
               continue
             }
@@ -1121,6 +1214,14 @@ export function Overlay() {
             if (node.widget.type !== 'alert') {
               pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: false, reset: true })
             }
+            // Narrate updated manual widget if data changed.
+            const newHash = widgetContentHash(node.widget)
+            if (narrationEnabledRef.current && lastSpokenHashRef.current.get(updatedId) !== newHash) {
+              const phrase = buildSpokenPhrase(node.widget)
+              if (phrase) {
+                pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
+              }
+            }
           } else {
             // ADD as new instance.
             // Enforce cap: evict oldest non-dragged instance if needed.
@@ -1158,6 +1259,15 @@ export function Overlay() {
             if (node.widget.type === 'scoreboard') {
               const [h, a] = node.widget.teams
               lastKnownScore = { home: h, away: a, minute: node.widget.minute }
+            }
+
+            // Narrate newly added widget.
+            if (narrationEnabledRef.current) {
+              const phrase = buildSpokenPhrase(node.widget)
+              if (phrase) {
+                const hash = widgetContentHash(node.widget)
+                pendingNarrationOpsRef.current.push({ phrase, instanceId: id, hash })
+              }
             }
 
             // Schedule auto-dismiss for new PROACTIVE alert instances only.
@@ -1232,6 +1342,22 @@ export function Overlay() {
         scheduleGenericTimer(op.id, op.sig, op.proactive, op.reset)
       }
       pendingGenericTimerOpsRef.current = []
+
+      // Narrate pending widgets — combine all phrases into one utterance to avoid
+      // overlapping speech. Only one speak() call per accumulateLayout invocation.
+      if (pendingNarrationOpsRef.current.length > 0) {
+        // Update the spoken-hash tracker for each widget BEFORE speaking so that
+        // a rapid second call sees the updated hash and skips re-narration.
+        for (const op of pendingNarrationOpsRef.current) {
+          lastSpokenHashRef.current.set(op.instanceId, op.hash)
+        }
+        // Join multiple widget phrases into one utterance (~2-3 short sentences).
+        const combined = pendingNarrationOpsRef.current
+          .map((op) => op.phrase)
+          .join('. ')
+        speak(combined)
+        pendingNarrationOpsRef.current = []
+      }
     },
     [scheduleAlertTimer, scheduleGenericTimer],
   )
@@ -1284,6 +1410,8 @@ export function Overlay() {
       return next
     })
     measureRefs.current.delete(id)
+    // Clear the spoken-hash entry so the widget can be narrated again if re-added.
+    lastSpokenHashRef.current.delete(id)
   }, [])
 
   // Persist drag offset (relative to slot anchor) for a widget instance.
@@ -1374,6 +1502,9 @@ export function Overlay() {
           }
           genericTimersRef.current.clear()
           recentlyAutoClosedCards.clear()
+          // Clear narration tracking so widgets can be re-narrated when re-added.
+          lastSpokenHashRef.current.clear()
+          lastAutoScoreHashRef.current = ''
           break
         }
       }
@@ -1579,6 +1710,7 @@ export function Overlay() {
         }
 
         // ADD new AUTO scoreboard instance (pendingNewId path).
+        // (Narration for the auto-scoreboard is handled AFTER setInstances returns.)
         // Enforce cap: evict oldest non-dragged instance if needed.
         const next = [...prev]
         if (next.length >= MAX_INSTANCES) {
@@ -1627,6 +1759,17 @@ export function Overlay() {
 
         return next
       })
+
+      // Narrate auto-scoreboard only when the score content actually changes.
+      // This prevents spammy narration on every poll tick (every 3.5 s).
+      if (narrationEnabledRef.current) {
+        const scoreHash = widgetContentHash(scoreboardWidget)
+        if (lastAutoScoreHashRef.current !== scoreHash) {
+          lastAutoScoreHashRef.current = scoreHash
+          const phrase = buildSpokenPhrase(scoreboardWidget)
+          if (phrase) speak(phrase)
+        }
+      }
     }
 
     window.addEventListener('klai:score-state', handleScoreState)
@@ -1692,6 +1835,24 @@ export function Overlay() {
     }
     window.addEventListener('klai:voice-state', handleVoiceState)
     return () => window.removeEventListener('klai:voice-state', handleVoiceState)
+  }, [])
+
+  // Narration: initialize from storage and listen for toggle events.
+  useEffect(() => {
+    // Load persisted narration preference on mount.
+    chrome.storage.local.get('narration', (result) => {
+      if (typeof result.narration === 'boolean') {
+        setNarrationEnabled(result.narration)
+      }
+    })
+
+    function handleNarration(event: Event) {
+      const { enabled } = (event as CustomEvent<{ enabled: boolean }>).detail
+      setNarrationEnabled(enabled)
+    }
+
+    window.addEventListener('klai:narration', handleNarration)
+    return () => window.removeEventListener('klai:narration', handleNarration)
   }, [])
 
   // Fallback video rect when no <video> is found: treat the full viewport as the rect.
@@ -1982,6 +2143,9 @@ export function Overlay() {
               }
               genericTimersRef.current.clear()
               recentlyAutoClosedCards.clear()
+              // Clear narration tracking so widgets can be re-narrated when re-added.
+              lastSpokenHashRef.current.clear()
+              lastAutoScoreHashRef.current = ''
             }}
             style={{
               position: 'fixed',

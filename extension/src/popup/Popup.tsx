@@ -65,6 +65,7 @@ export function Popup() {
   const [text, setText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [watchMode, setWatchMode] = useState(false)
+  const [narrationEnabled, setNarrationEnabled] = useState(false)
   const [intro, setIntro] = useState<'idle' | 'thinking' | 'done'>('idle')
 
   const busy = status === 'listening' || status === 'sending'
@@ -77,8 +78,9 @@ export function Popup() {
   }, [])
 
   useEffect(() => {
-    chrome.storage.local.get('watchMode', (result) => {
+    chrome.storage.local.get(['watchMode', 'narration'], (result) => {
       if (typeof result.watchMode === 'boolean') setWatchMode(result.watchMode)
+      if (typeof result.narration === 'boolean') setNarrationEnabled(result.narration)
     })
   }, [])
 
@@ -98,6 +100,20 @@ export function Popup() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       if (tab?.id) {
         chrome.tabs.sendMessage(tab.id, { type: 'KLAI_WATCH', enabled: next })
+      }
+    } catch {
+      // Tab may not have the content script (e.g. chrome:// pages) — ignore.
+    }
+  }
+
+  async function handleNarrationToggle() {
+    const next = !narrationEnabled
+    setNarrationEnabled(next)
+    chrome.storage.local.set({ narration: next })
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, { type: 'KLAI_NARRATION', enabled: next })
       }
     } catch {
       // Tab may not have the content script (e.g. chrome:// pages) — ignore.
@@ -273,6 +289,45 @@ export function Popup() {
             position: 'absolute',
             top: 2,
             left: watchMode ? 18 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: '50%',
+            background: '#fff',
+            transition: 'left 0.2s',
+          }} />
+        </button>
+      </div>
+
+      {/* Narration toggle */}
+      <div style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 8,
+        paddingTop: 8,
+        borderTop: '1px solid rgba(255,255,255,0.07)',
+      }}>
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+          {narrationEnabled ? 'Narracion por voz activa' : 'Narracion por voz'}
+        </span>
+        <button
+          onClick={handleNarrationToggle}
+          style={{
+            width: 36,
+            height: 20,
+            borderRadius: 999,
+            border: 'none',
+            background: narrationEnabled ? '#8B7FFF' : 'rgba(255,255,255,0.12)',
+            cursor: 'pointer',
+            position: 'relative',
+            transition: 'background 0.2s',
+          }}
+        >
+          <span style={{
+            position: 'absolute',
+            top: 2,
+            left: narrationEnabled ? 18 : 2,
             width: 16,
             height: 16,
             borderRadius: '50%',
