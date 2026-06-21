@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { WidgetNodeSchema, LayoutSchema, ControlActionSchema, SlotSchema } from '@/lib/schema'
-import { DATA_TOOLS, runTool } from '@/lib/tools'
+import { GET_SPORTS_DATA_TOOL, runTool } from '@/lib/tools'
 
 // Hardcoded fallback returned when ANTHROPIC_API_KEY is missing (dev without a key).
 // Returns a valid Layout so the no-key path exercises the new schema.
@@ -275,18 +275,16 @@ Call render_layout with the best matching layout.`
   // isn't on screen, then finish with render_layout.
   const GENERATE_SYSTEM = `You are Klai, a generative overlay assistant for live video.
 NEVER use emojis, emoticons, or pictographic characters in any output field — message, title, body, labels, point text, team names, or any other string. Plain text only. For substitutions write "Entra: [player]. Sale: [player]." with no arrow symbols or emojis of any kind.
-You have four tools:
+You have three tools:
 - get_sports_data: PRIMARY source for the live FIFA World Cup match shown on screen. Use it FIRST for any football/soccer question. It covers score, stats, goals/cards, referee/venue/TV, match leaders, lineups/formations, group standings, tournament record, recent form/head-to-head, betting odds, and news. Pass the two team names you read from the on-screen scorebug in \`teams\` (order/abbreviations don't matter; if you can't read them, call it with no teams to resolve the only live game). Pass \`want\` as an array of the section(s) the user asked for — e.g. ["score"], ["stats"], ["info"] for referee/venue, ["lineups"], ["standings"], ["form"], ["odds"], ["news"], or ["score","info"] for combined; request ONLY what's needed, omit \`want\` for a quick overview. Map results into scoreboard/statpanel/alert/infocard/keypoints widgets, and TRUST its score/stats over what you read from the image.
-- web_research: fallback for facts get_sports_data can't provide — non-World-Cup sports, player bios, current news, definitions, prices, general knowledge. Prefer one focused query.
 - render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step when creating or updating widgets.
 - control_widgets: manage existing on-screen widgets — close specific instances by id, move one instance to a new slot, or clear all instances. Call this when the user's intent is to close, dismiss, move, or clear existing widgets (not to create new ones).
 Policy:
 1. If the user's intent is to manage existing widgets (close, move, dismiss, clear), call control_widgets immediately. Do NOT call render_layout for management requests.
 2. If the screen shows a live football/soccer match and the user wants new information, call get_sports_data with the team names from the scorebug BEFORE anything else, passing the \`want\` section(s) that match the user's question.
 3. When the user asks about something beyond the on-screen scorebug — referee, lineups, detailed stats, standings, form, odds, news — call get_sports_data with the matching \`want\` section(s).
-4. If get_sports_data returns no match (or the topic is non-World-Cup / a non-sports fact), use web_research.
-5. For purely on-screen, non-factual content, you may skip the data tools.
-6. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
+4. For purely on-screen or non-sports content, you may skip the data tools and render the best answer from the screenshot.
+5. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
 If a tool fails or returns nothing, render the best answer you can. For create requests, always finish by calling render_layout. For manage requests, call control_widgets and stop.`
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
@@ -295,28 +293,23 @@ If a tool fails or returns nothing, render the best answer you can. For create r
   // Tracks whether the model called control_widgets (management intent).
   let controlToolUse: Anthropic.ToolUseBlock | null = null
 
-  // The control_widgets tool — allows the model to close/move/clear existing widgets,
-  // or toggle voice narration on or off.
+  // The control_widgets tool — allows the model to close/move/clear existing widgets.
   const CONTROL_WIDGETS_TOOL: Anthropic.Tool = {
     name: 'control_widgets',
     description:
-      'Manage existing on-screen widget instances, or toggle voice narration. ' +
+      'Manage existing on-screen widget instances. ' +
       'Use this when the user wants to CLOSE, MOVE, or CLEAR widgets — not to create new ones. ' +
-      'Also use this when the user wants to turn voice narration / reading-aloud ON or OFF ' +
-      '(e.g. "activa la narración", "lee en voz alta", "narra el partido", "turn on narration", ' +
-      '"deja de leer", "apaga la narración", "turn off narration", "stop reading"). ' +
       'Reference widget ids from the "Currently on screen" list in the instruction text.',
     input_schema: {
       type: 'object' as const,
       properties: {
         action: {
           type: 'string',
-          enum: ['close', 'move', 'clear_all', 'narration'],
+          enum: ['close', 'move', 'clear_all'],
           description:
             'close = remove specific widget(s) by id; ' +
             'move = reposition one widget to a different slot; ' +
-            'clear_all = remove every widget on screen; ' +
-            'narration = toggle voice narration on or off (use the enabled field).',
+            'clear_all = remove every widget on screen.',
         },
         targetIds: {
           type: 'array',
@@ -336,10 +329,6 @@ If a tool fails or returns nothing, render the best answer you can. For create r
           ],
           description: '[move only] The destination slot.',
         },
-        enabled: {
-          type: 'boolean',
-          description: '[narration only] true = turn narration on; false = turn narration off.',
-        },
       },
       required: ['action'],
     },
@@ -352,7 +341,7 @@ If a tool fails or returns nothing, render the best answer you can. For create r
     max_tokens: 2048,
     system: GENERATE_SYSTEM,
     tools: [
-      ...DATA_TOOLS,
+      GET_SPORTS_DATA_TOOL,
       CONTROL_WIDGETS_TOOL,
       {
         name: 'render_layout',
@@ -613,9 +602,6 @@ If a tool fails or returns nothing, render the best answer you can. For create r
         break
       case 'clear_all':
         controlCandidate = { kind: 'control', action: 'clear_all' }
-        break
-      case 'narration':
-        controlCandidate = { kind: 'control', action: 'narration', enabled: raw.enabled ?? false }
         break
       default:
         return Response.json(

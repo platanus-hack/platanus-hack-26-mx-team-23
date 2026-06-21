@@ -1058,12 +1058,6 @@ export function Overlay() {
 
   const [voiceState, setVoiceState] = useState<VoiceIndicatorState>('idle')
 
-  // Narration enabled/disabled — persisted in chrome.storage.local under 'narration'.
-  // Defaults ON; only an explicitly-stored false (user muted) overrides it.
-  const [narrationEnabled, setNarrationEnabled] = useState(true)
-  // Ref mirror so accumulateLayout (a useCallback) always reads the latest value.
-  const narrationEnabledRef = useRef(true)
-  narrationEnabledRef.current = narrationEnabled
   // Tracks the last content hash spoken per instance id.
   // Used to prevent re-narrating the same widget data on every React re-render.
   const lastSpokenHashRef = useRef<Map<string, string>>(new Map())
@@ -1316,7 +1310,7 @@ export function Overlay() {
             }
             // Narrate updated widget only on manual queries (never for proactive/watch events).
             const newHash = widgetContentHash(node.widget)
-            if ((!proactive && narrationEnabledRef.current) && lastSpokenHashRef.current.get(updatedId) !== newHash) {
+            if (!proactive && lastSpokenHashRef.current.get(updatedId) !== newHash) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
@@ -1362,7 +1356,7 @@ export function Overlay() {
             }
 
             // Narrate newly added widget only on manual queries (never for proactive/watch events).
-            if (!proactive && narrationEnabledRef.current) {
+            if (!proactive) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 const hash = widgetContentHash(node.widget)
@@ -1605,20 +1599,6 @@ export function Overlay() {
           // Clear narration tracking so widgets can be re-narrated when re-added.
           lastSpokenHashRef.current.clear()
           lastAutoScoreHashRef.current = ''
-          break
-        }
-        case 'narration': {
-          // Toggle voice narration and persist the preference so the popup toggle
-          // reflects the current state immediately.
-          setNarrationEnabled(action.enabled)
-          chrome.storage.local.set({ narration: action.enabled })
-          if (action.enabled) {
-            // Narrate confirmation through the offscreen doc (same reliable path).
-            narrate('Narración activada')
-          } else {
-            // Stop any ongoing speech immediately when narration is turned off.
-            window.speechSynthesis.cancel()
-          }
           break
         }
       }
@@ -1941,23 +1921,6 @@ export function Overlay() {
     }
     window.addEventListener('klai:voice-state', handleVoiceState)
     return () => window.removeEventListener('klai:voice-state', handleVoiceState)
-  }, [])
-
-  // Narration: initialize from storage and listen for toggle events.
-  useEffect(() => {
-    // Load persisted narration preference on mount.
-    chrome.storage.local.get('narration', (result) => {
-      // Default ON — only respect an explicit stored false (user deliberately muted).
-      setNarrationEnabled(result.narration === false ? false : true)
-    })
-
-    function handleNarration(event: Event) {
-      const { enabled } = (event as CustomEvent<{ enabled: boolean }>).detail
-      setNarrationEnabled(enabled)
-    }
-
-    window.addEventListener('klai:narration', handleNarration)
-    return () => window.removeEventListener('klai:narration', handleNarration)
   }, [])
 
   // Unlock the shared audio element on the user's first gesture so that

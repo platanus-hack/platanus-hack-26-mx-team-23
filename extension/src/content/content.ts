@@ -122,13 +122,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
   }
 
-  // Narration toggle from popup — forward to the overlay.
-  if (message?.type === 'KLAI_NARRATION' && typeof message.enabled === 'boolean') {
-    window.dispatchEvent(
-      new CustomEvent('klai:narration', { detail: { enabled: message.enabled } }),
-    )
-  }
-
   // Voice pipeline state from the service worker — forward to the overlay.
   if (message?.type === 'KLAI_VOICE_STATE' && typeof message.state === 'string') {
     window.dispatchEvent(
@@ -138,15 +131,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 })
 
 // ---------------------------------------------------------------------------
-// Resume watch mode and narration state after a page reload.
+// Resume watch mode after a page reload.
 // ---------------------------------------------------------------------------
-chrome.storage.local.get(['watchMode', 'narration'], (result) => {
+chrome.storage.local.get(['watchMode'], (result) => {
   if (result.watchMode === true) {
     startWatchMode()
-  }
-  if (typeof result.narration === 'boolean') {
-    window.dispatchEvent(
-      new CustomEvent('klai:narration', { detail: { enabled: result.narration } }),
-    )
   }
 })
