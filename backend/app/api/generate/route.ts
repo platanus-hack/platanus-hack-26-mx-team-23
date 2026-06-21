@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { WidgetNodeSchema, LayoutSchema, ResponseSchema } from '@/lib/schema'
+import { WidgetNodeSchema, LayoutSchema, ControlActionSchema, SlotSchema } from '@/lib/schema'
 import { DATA_TOOLS, runTool } from '@/lib/tools'
 
 // Hardcoded fallback returned when ANTHROPIC_API_KEY is missing (dev without a key).
@@ -31,13 +31,22 @@ export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS })
 }
 
+// Describes an active widget instance sent from the extension so the model
+// can resolve references like "close the scoreboard" or "move the stats widget".
+interface ActiveWidgetInfo {
+  id: string
+  type: string
+  label: string
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
-  const { text, image, mode, history } = body as {
+  const { text, image, mode, history, activeWidgets } = body as {
     text?: string
     image?: string
     mode?: string
     history?: Array<{ query: string; summary: string }>
+    activeWidgets?: ActiveWidgetInfo[]
   }
 
   // Detect mode: vision-only proactive scan — no user text required.
@@ -89,10 +98,27 @@ export async function POST(request: Request) {
         `identify the relevant subject from the most recent relevant interaction and answer about that.\n`
       : ''
 
+  // Build the active-widgets context block so the model can resolve management
+  // references like "close the scoreboard" or "move the goals widget to the right".
+  const activeWidgetsBlock =
+    Array.isArray(activeWidgets) && activeWidgets.length > 0
+      ? `\nCurrently on screen:\n${activeWidgets
+          .map((w) => `  id=${w.id}  type=${w.type}  label="${w.label}"`)
+          .join('\n')}\n\n` +
+        `If the user wants to CLOSE, MOVE, or CLEAR existing widgets, call control_widgets ` +
+        `referencing the exact id(s) from the list above.\n` +
+        `Resolve natural-language references against the list — e.g. "this" or "that" → most recently ` +
+        `relevant widget; "the scoreboard" → type=scoreboard; "the stats" or "the cards" → ` +
+        `type=statpanel whose label matches; "everything" or "all" → action=clear_all.\n` +
+        `For move: choose the slot enum closest to the user's phrasing — ` +
+        `"to the right" → *-right slot; "top" → top-*; "bottom left" → bottom-left; etc.\n` +
+        `If the user wants NEW information or asks a question about the content, call render_layout instead.\n`
+      : ''
+
   // Build the instruction text.
   const instructionText = hasImage
     ? `You are a generative overlay assistant. The screenshot shows a video currently playing.
-${historyBlock}
+${historyBlock}${activeWidgetsBlock}
 STEP 1 — Identify the DOMAIN of the PRIMARY content in the MAIN video frame:
   The PRIMARY content is what is being actively shown in the large central video area.
   It is NOT a picture-in-picture feed, NOT a commentator webcam, NOT a promo/teaser for upcoming content.
@@ -181,8 +207,8 @@ use multiple widgets — e.g. keypoints top-left + infocard bottom-right (non-ad
 For single-widget requests, one node is fine.
 Call render_layout with the data you can read from the PRIMARY content in the video.`
     : `You are a generative overlay assistant. The user said: "${text}".
-${historyBlock}
-You must call render_layout to compose a layout of 1–6 widgets placed in screen slots.
+${historyBlock}${activeWidgetsBlock}
+You must call either render_layout (to create/update widgets) or control_widgets (to manage existing ones).
 Available slots: top-left, top-center, top-right, middle-left, middle-right, bottom-left, bottom-center, bottom-right.
 
 Widget types — choose based on the user's intent:
@@ -248,21 +274,66 @@ Call render_layout with the best matching layout.`
   // System guidance for the agent loop: research with web_research when the answer
   // isn't on screen, then finish with render_layout.
   const GENERATE_SYSTEM = `You are Klai, a generative overlay assistant for live video.
-You have three tools:
+You have four tools:
 - get_sports_data: PRIMARY source for the live FIFA World Cup match shown on screen. Use it FIRST for any football/soccer question. It covers score, stats, goals/cards, referee/venue/TV, match leaders, lineups/formations, group standings, tournament record, recent form/head-to-head, betting odds, and news. Pass the two team names you read from the on-screen scorebug in \`teams\` (order/abbreviations don't matter; if you can't read them, call it with no teams to resolve the only live game). Pass \`want\` as an array of the section(s) the user asked for — e.g. ["score"], ["stats"], ["info"] for referee/venue, ["lineups"], ["standings"], ["form"], ["odds"], ["news"], or ["score","info"] for combined; request ONLY what's needed, omit \`want\` for a quick overview. Map results into scoreboard/statpanel/alert/infocard/keypoints widgets, and TRUST its score/stats over what you read from the image.
 - web_research: fallback for facts get_sports_data can't provide — non-World-Cup sports, player bios, current news, definitions, prices, general knowledge. Prefer one focused query.
-- render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step.
+- render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step when creating or updating widgets.
+- control_widgets: manage existing on-screen widgets — close specific instances by id, move one instance to a new slot, or clear all instances. Call this when the user's intent is to close, dismiss, move, or clear existing widgets (not to create new ones).
 Policy:
-1. If the screen shows a live football/soccer match, call get_sports_data with the team names from the scorebug BEFORE anything else, passing the \`want\` section(s) that match the user's question.
-2. When the user asks about something beyond the on-screen scorebug — referee, lineups, detailed stats, standings, form, odds, news — call get_sports_data with the matching \`want\` section(s).
-3. If get_sports_data returns no match (or the topic is non-World-Cup / a non-sports fact), use web_research.
-4. For purely on-screen, non-factual content, you may skip the data tools.
-5. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
-If a tool fails or returns nothing, render the best answer you can. Always finish by calling render_layout.`
+1. If the user's intent is to manage existing widgets (close, move, dismiss, clear), call control_widgets immediately. Do NOT call render_layout for management requests.
+2. If the screen shows a live football/soccer match and the user wants new information, call get_sports_data with the team names from the scorebug BEFORE anything else, passing the \`want\` section(s) that match the user's question.
+3. When the user asks about something beyond the on-screen scorebug — referee, lineups, detailed stats, standings, form, odds, news — call get_sports_data with the matching \`want\` section(s).
+4. If get_sports_data returns no match (or the topic is non-World-Cup / a non-sports fact), use web_research.
+5. For purely on-screen, non-factual content, you may skip the data tools.
+6. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
+If a tool fails or returns nothing, render the best answer you can. For create requests, always finish by calling render_layout. For manage requests, call control_widgets and stop.`
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
   const MAX_ROUNDS = 5
   let toolUse: Anthropic.ToolUseBlock | null = null
+  // Tracks whether the model called control_widgets (management intent).
+  let controlToolUse: Anthropic.ToolUseBlock | null = null
+
+  // The control_widgets tool — allows the model to close/move/clear existing widgets.
+  const CONTROL_WIDGETS_TOOL: Anthropic.Tool = {
+    name: 'control_widgets',
+    description:
+      'Manage existing on-screen widget instances. ' +
+      'Use this when the user wants to CLOSE, MOVE, or CLEAR widgets — not to create new ones. ' +
+      'Reference widget ids from the "Currently on screen" list in the instruction text.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['close', 'move', 'clear_all'],
+          description:
+            'close = remove specific widget(s) by id; ' +
+            'move = reposition one widget to a different slot; ' +
+            'clear_all = remove every widget on screen.',
+        },
+        targetIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '[close only] Array of instance ids to close. Must match ids from the active-widgets list.',
+        },
+        targetId: {
+          type: 'string',
+          description: '[move only] The single instance id to reposition.',
+        },
+        slot: {
+          type: 'string',
+          enum: [
+            'top-left', 'top-center', 'top-right',
+            'middle-left', 'middle-right',
+            'bottom-left', 'bottom-center', 'bottom-right',
+          ],
+          description: '[move only] The destination slot.',
+        },
+      },
+      required: ['action'],
+    },
+  }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const isLast = round === MAX_ROUNDS - 1
@@ -272,6 +343,7 @@ If a tool fails or returns nothing, render the best answer you can. Always finis
     system: GENERATE_SYSTEM,
     tools: [
       ...DATA_TOOLS,
+      CONTROL_WIDGETS_TOOL,
       {
         name: 'render_layout',
         description:
@@ -462,16 +534,26 @@ If a tool fails or returns nothing, render the best answer you can. Always finis
         },
       },
     ],
-    // On the last allowed round force render_layout so we always get a layout.
+    // On the last allowed round force render_layout so we always get a layout
+    // (only applies when no control_widgets call was made earlier).
+    // Otherwise: { type: 'any' } — model MUST call a tool but picks which one,
+    // allowing it to choose control_widgets for management intents.
     tool_choice: isLast
       ? { type: 'tool', name: 'render_layout' }
-      : { type: 'auto' },
+      : { type: 'any' },
     messages,
   })
 
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
     )
+
+    // Terminal: control_widgets called → capture and return immediately.
+    const controlCall = toolUses.find((t) => t.name === 'control_widgets')
+    if (controlCall) {
+      controlToolUse = controlCall
+      break
+    }
 
     // Terminal: render_layout called → capture its input and stop.
     const renderCall = toolUses.find((t) => t.name === 'render_layout')
@@ -490,7 +572,7 @@ If a tool fails or returns nothing, render the best answer you can. Always finis
       continue
     }
 
-    // Execute data tools (web_research) and feed results back as tool_result.
+    // Execute data tools (get_sports_data, web_research) and feed results back.
     messages.push({ role: 'assistant', content: response.content })
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     for (const tu of toolUses) {
@@ -498,6 +580,46 @@ If a tool fails or returns nothing, render the best answer you can. Always finis
       toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: out })
     }
     messages.push({ role: 'user', content: toolResults })
+  }
+
+  // --- Handle control_widgets response ---
+  if (controlToolUse) {
+    // Reshape the flat tool input into the ControlAction shape for Zod validation.
+    const raw = controlToolUse.input as {
+      action: string
+      targetIds?: string[]
+      targetId?: string
+      slot?: string
+    }
+
+    let controlCandidate: unknown
+    switch (raw.action) {
+      case 'close':
+        controlCandidate = { kind: 'control', action: 'close', targetIds: raw.targetIds ?? [] }
+        break
+      case 'move':
+        controlCandidate = { kind: 'control', action: 'move', targetId: raw.targetId ?? '', slot: raw.slot }
+        break
+      case 'clear_all':
+        controlCandidate = { kind: 'control', action: 'clear_all' }
+        break
+      default:
+        return Response.json(
+          { error: `Unknown control action: ${raw.action}` },
+          { status: 502, headers: CORS_HEADERS }
+        )
+    }
+
+    const parsed = ControlActionSchema.safeParse(controlCandidate)
+    if (!parsed.success) {
+      console.error('[klai] control_widgets Zod validation failed:', parsed.error)
+      return Response.json(
+        { error: 'Control action schema validation failed', details: parsed.error },
+        { status: 502, headers: CORS_HEADERS }
+      )
+    }
+
+    return Response.json(parsed.data, { headers: CORS_HEADERS })
   }
 
   if (!toolUse) {

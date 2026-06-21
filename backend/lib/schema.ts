@@ -145,7 +145,34 @@ export const LayoutSchema = z.object({
 
 export type Layout = z.infer<typeof LayoutSchema>
 
-// --- Top-level response: single widget (back-compat) OR a layout ---
-export const ResponseSchema = z.union([WidgetNodeSchema, LayoutSchema])
+// --- Control actions ---
+// Emitted by the backend when the user's intent is to manage existing widgets
+// rather than create new ones. The extension applies these directly without
+// accumulating them as layout content.
+export const ControlActionSchema = z.discriminatedUnion('action', [
+  // Close one or more specific widget instances by id.
+  z.object({
+    kind: z.literal('control'),
+    action: z.literal('close'),
+    targetIds: z.array(z.string()).min(1),
+  }),
+  // Move one widget instance to a new slot.
+  z.object({
+    kind: z.literal('control'),
+    action: z.literal('move'),
+    targetId: z.string(),
+    slot: SlotSchema,
+  }),
+  // Clear all active widget instances (same as the "Clear all" button).
+  z.object({
+    kind: z.literal('control'),
+    action: z.literal('clear_all'),
+  }),
+])
+
+export type ControlAction = z.infer<typeof ControlActionSchema>
+
+// --- Top-level response: single widget (back-compat), a layout, OR a control action ---
+export const ResponseSchema = z.union([WidgetNodeSchema, LayoutSchema, ControlActionSchema])
 
 export type KlaiResponse = z.infer<typeof ResponseSchema>

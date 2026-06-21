@@ -2,8 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react
 import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
 import {
   ResponseSchema,
+  ControlActionSchema,
   LayoutSchema,
   WidgetNodeSchema,
+  type ControlAction,
   type Layout,
   type LayoutNode,
   type Slot,
@@ -79,6 +81,39 @@ function deriveLayoutSummary(layout: Layout): string {
     }
   })
   return parts.join(' | ')
+}
+
+/**
+ * Derives a short human-readable label for a single WidgetInstance so the
+ * backend can resolve voice/text references like "close the scoreboard" or
+ * "move the stats widget to the right".
+ */
+function deriveWidgetLabel(inst: WidgetInstance): string {
+  const w = inst.widget
+  switch (w.type) {
+    case 'scoreboard': {
+      const [h, a] = w.teams
+      return `scoreboard (${h.name} vs ${a.name})`
+    }
+    case 'statpanel':
+      return w.title ? `statpanel: ${w.title}` : 'statpanel'
+    case 'timer':
+      return `timer${w.label ? ` (${w.label})` : ''} ${w.durationSeconds}s`
+    case 'alert':
+      return `alert: ${w.message.slice(0, 40)}`
+    case 'momentum': {
+      const [h, a] = w.teams
+      return `momentum: ${h.name} ${h.probability}% vs ${a.name} ${a.probability}%`
+    }
+    case 'infocard':
+      return `infocard: ${w.title}`
+    case 'keypoints':
+      return `keypoints${w.title ? `: ${w.title}` : ''}`
+    case 'definition':
+      return `definition: ${w.term}`
+    default:
+      return (w as { type: string }).type
+  }
 }
 
 /** Append a manual interaction to the session history, evicting the oldest if at cap. */
@@ -1027,6 +1062,66 @@ export function Overlay() {
     )
   }, [])
 
+  // Apply a ControlAction returned by the backend — called from handleQuery when
+  // the model chose control_widgets instead of render_layout.
+  const applyControlAction = useCallback(
+    (action: ControlAction) => {
+      switch (action.action) {
+        case 'close': {
+          // Close each targeted instance using the same path as the X button:
+          // adds the widget's signature to dismissedSignatures and, if proactive,
+          // adds its type to dismissedAutoTypes so watch mode won't resurface it.
+          for (const targetId of action.targetIds) {
+            // Only call if the instance actually exists — ignore unknown ids gracefully.
+            const exists = instancesRef.current.some((i) => i.id === targetId)
+            if (exists) {
+              closeInstance(targetId, true)
+            }
+          }
+          break
+        }
+        case 'move': {
+          // Reposition one widget to a new slot.
+          // Clear dragOffset/manualPos and placedSlot so the resolver places it
+          // at the new slot on the next measure pass, then locks it there.
+          const exists = instancesRef.current.some((i) => i.id === action.targetId)
+          if (exists) {
+            setInstances((prev) =>
+              prev.map((inst) =>
+                inst.id === action.targetId
+                  ? {
+                      ...inst,
+                      slot: action.slot,
+                      // Clear drag state so the new slot anchor takes effect.
+                      dragOffset: null,
+                      manualPos: null,
+                      // Clear the placed slot so the resolver re-positions at the new slot.
+                      placedSlot: null,
+                      placedOffsetY: 0,
+                    }
+                  : inst,
+              ),
+            )
+          }
+          break
+        }
+        case 'clear_all': {
+          // Same as the "Clear all" button — full reset including dismissed sets.
+          setInstances([])
+          setRevealedIds(new Set())
+          measureRefs.current.clear()
+          lastNodeFingerprintRef.current = ''
+          setPlacements(new Map())
+          dismissedSignatures.clear()
+          dismissedAutoTypes.clear()
+          lastSuggestionSignatureRef.current = ''
+          break
+        }
+      }
+    },
+    [closeInstance],
+  )
+
   // Listen for intent queries dispatched by the content script (manual queries).
   useEffect(() => {
     async function handleQuery(event: Event) {
@@ -1039,11 +1134,25 @@ export function Overlay() {
       setStatusState({ status: 'loading' })
 
       try {
+        // Build a compact description of every active widget instance so the
+        // backend can resolve management references like "close the scoreboard".
+        const activeWidgets = instancesRef.current.map((inst) => ({
+          id: inst.id,
+          type: inst.widget.type,
+          label: deriveWidgetLabel(inst),
+        }))
+
         // Include the current session history so the backend can resolve
         // conversational references (e.g. "and his stats?", "the other team?").
-        const body: { text: string; image?: string; history?: HistoryEntry[] } = { text }
+        const body: {
+          text: string
+          image?: string
+          history?: HistoryEntry[]
+          activeWidgets?: Array<{ id: string; type: string; label: string }>
+        } = { text }
         if (image) body.image = image
         if (sessionHistory.length > 0) body.history = [...sessionHistory]
+        if (activeWidgets.length > 0) body.activeWidgets = activeWidgets
 
         const response = await fetch(`${BACKEND_BASE_URL}/api/generate`, {
           method: 'POST',
@@ -1060,10 +1169,21 @@ export function Overlay() {
 
         const rawData = await response.json()
 
-        // Validate with the top-level ResponseSchema — handles both Layout and bare widget.
+        // Validate with the top-level ResponseSchema — handles Layout, bare widget,
+        // and the new ControlAction type.
         const parsed = ResponseSchema.safeParse(rawData)
         if (!parsed.success) {
           throw new Error(`Invalid response schema from backend: ${parsed.error.message}`)
+        }
+
+        // --- Branch: control action vs layout/widget ---
+        const controlParsed = ControlActionSchema.safeParse(parsed.data)
+        if (controlParsed.success) {
+          // The model chose to manage existing widgets — apply directly.
+          setStatusState({ status: 'idle' })
+          applyControlAction(controlParsed.data)
+          // Control actions are not added to session history (they are not content).
+          return
         }
 
         // Normalize to a Layout regardless of whether we got a bare widget or a layout.
