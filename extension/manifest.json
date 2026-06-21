@@ -3,12 +3,21 @@
   "name": "Klai",
   "version": "0.1.0",
   "description": "Voice-driven generative overlay engine for live video",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "offscreen"],
   "host_permissions": ["<all_urls>"],
   "icons": {
     "16": "icon-16.png",
     "48": "icon-48.png",
     "128": "icon-128.png"
+  },
+  "commands": {
+    "trigger-klai": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Activate Klai by voice"
+    }
   },
   "action": {
     "default_popup": "index.html",

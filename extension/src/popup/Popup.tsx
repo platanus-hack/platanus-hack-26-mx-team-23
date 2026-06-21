@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { recognizeOnce, isSpeechSupported } from '../lib/voice'
+import { recordClip, transcribeBlob } from '../lib/recorder'
+import { ensureContentScript } from '../lib/ensure-content-script'
 
 type Status = 'idle' | 'listening' | 'sending' | 'done' | 'error'
 
@@ -52,6 +53,9 @@ async function captureTab(): Promise<string | null> {
 async function sendToActiveTab(text: string, image: string | null): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) throw new Error('No active tab found')
+  // Inject the overlay content script if the tab doesn't have it yet
+  // (tabs opened before the extension loaded won't, otherwise this no-ops).
+  await ensureContentScript(tab.id)
   const message: { type: string; text: string; image?: string } = { type: 'KLAI_TEXT', text }
   if (image) message.image = image
   await chrome.tabs.sendMessage(tab.id, message)
@@ -63,7 +67,7 @@ export function Popup() {
   const [statusMsg, setStatusMsg] = useState('')
   const [watchMode, setWatchMode] = useState(false)
 
-  const speechAvailable = isSpeechSupported()
+  const busy = status === 'listening' || status === 'sending'
 
   // Load persisted watch mode state on mount.
   useEffect(() => {
@@ -90,19 +94,45 @@ export function Popup() {
     }
   }
 
+  // Record in the popup itself (it stays open) and show every step. getUserMedia
+  // works without a prompt because the permission was granted via permission.html.
   async function handleMic() {
-    setStatus('listening')
-    setStatusMsg('Listening...')
+    try {
+      setStatus('listening')
+      setStatusMsg('Grabando… habla y haz una pausa')
+      const blob = await recordClip()
 
-    const result = await recognizeOnce()
-    if (!result.ok) {
+      setStatus('sending')
+      setStatusMsg('Transcribiendo…')
+      const transcript = await transcribeBlob(blob)
+      if (!transcript) {
+        setStatus('error')
+        setStatusMsg('No se captó audio. Reintenta.')
+        return
+      }
+
+      setText(transcript)
+      setStatusMsg(`"${transcript}" — enviando al video…`)
+      const image = await captureTab()
+      await sendToActiveTab(transcript, image)
+
+      setStatus('done')
+      setStatusMsg('Listo — mira el video')
+    } catch (err) {
       setStatus('error')
-      setStatusMsg(result.error)
-      return
+      const msg = err instanceof Error ? err.message : 'Error de micrófono'
+      setStatusMsg(
+        /denied|notallowed|permission|dismiss/i.test(msg)
+          ? 'Falta permiso de micrófono. Pulsa "Habilitar permiso" abajo.'
+          : msg
+      )
     }
+  }
 
-    setText(result.text)
-    await submitText(result.text)
+  // Open the one-time microphone permission page (a popup cannot prompt for mic).
+  function handleEnableMic() {
+    chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') })
+    window.close()
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -127,44 +157,38 @@ export function Popup() {
     }
   }
 
-  const micLabel =
-    status === 'listening'
-      ? '... Listening'
-      : status === 'sending'
-        ? 'Sending...'
-        : 'Speak'
-
   return (
     <div className="w-72 p-4 bg-gray-900 text-white font-sans">
       <h1 className="text-lg font-bold mb-1 text-yellow-400">Klai</h1>
       <p className="text-xs text-gray-400 mb-4">Voice-driven overlay engine</p>
 
-      {/* Mic button — only shown when speech is available */}
-      {speechAvailable && (
-        <button
-          className="w-full py-3 rounded-xl bg-yellow-400 text-black font-bold text-sm mb-3 cursor-pointer hover:bg-yellow-300 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-          onClick={handleMic}
-          disabled={status === 'listening' || status === 'sending'}
+      {/* Mic button — records in the popup (stays open) and shows each step. */}
+      <button
+        className="w-full py-3 rounded-xl bg-yellow-400 text-black font-bold text-sm mb-1 cursor-pointer hover:bg-yellow-300 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+        onClick={handleMic}
+        disabled={busy}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
-          {micLabel}
-        </button>
-      )}
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" />
+          <line x1="8" y1="23" x2="16" y2="23" />
+        </svg>
+        {status === 'listening' ? 'Grabando…' : status === 'sending' ? 'Procesando…' : 'Hablar'}
+      </button>
+      <p className="text-[10px] text-gray-500 text-center mb-3">
+        o usa el atajo Ctrl/Cmd+Shift+Y sobre el video
+      </p>
 
       {/* Text input fallback (always visible) */}
       <form onSubmit={handleSubmit} className="flex gap-2">
@@ -216,6 +240,14 @@ export function Popup() {
           {statusMsg}
         </p>
       )}
+
+      {/* One-time mic permission (a popup can't prompt for the mic itself) */}
+      <button
+        onClick={handleEnableMic}
+        className="mt-4 w-full text-[11px] text-gray-400 underline hover:text-yellow-400 transition-colors cursor-pointer"
+      >
+        ¿El micrófono no funciona? Habilitar permiso
+      </button>
     </div>
   )
 }

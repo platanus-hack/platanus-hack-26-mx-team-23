@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Klai — Permiso de micrófono</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0a0a0e;
+        color: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        padding: 24px;
+      }
+      .card {
+        width: 100%;
+        max-width: 440px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 32px;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      }
+      h1 { margin: 0 0 4px; font-size: 26px; color: #facc15; }
+      .tagline { margin: 0 0 24px; font-size: 13px; color: #9ca3af; }
+      .mic { margin-bottom: 12px; color: #facc15; }
+      p { font-size: 15px; line-height: 1.5; color: #d1d5db; margin: 0 0 24px; }
+      button {
+        width: 100%;
+        padding: 14px;
+        border: none;
+        border-radius: 12px;
+        background: #facc15;
+        color: #000;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      button:hover { background: #fde047; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .status { margin-top: 18px; font-size: 14px; min-height: 20px; }
+      .status.ok { color: #4ade80; }
+      .status.err { color: #f87171; }
+      .hint { margin-top: 14px; font-size: 12px; color: #6b7280; line-height: 1.5; }
+      code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 5px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="mic">
+        <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" />
+          <line x1="8" y1="23" x2="16" y2="23" />
+        </svg>
+      </div>
+      <h1>Klai</h1>
+      <p class="tagline">Tu voz construye la interfaz sobre el video</p>
+      <p>
+        Para escucharte, Klai necesita acceso a tu <strong>micrófono</strong>.
+        Lo concedes una sola vez.
+      </p>
+      <button id="enable">Habilitar micrófono</button>
+      <div class="status" id="status"></div>
+      <div class="hint" id="hint">
+        Después, sobre cualquier video, presiona
+        <code>Ctrl/Cmd + Shift + Y</code> y habla.
+      </div>
+    </div>
+    <script src="permission.js"></script>
+  </body>
+</html>

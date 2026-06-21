@@ -92,7 +92,13 @@ if (document.readyState === 'loading') {
 // Message listeners
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Presence check used by ensureContentScript() before delivering KLAI_TEXT.
+  if (message?.type === 'KLAI_PING') {
+    sendResponse({ ok: true })
+    return
+  }
+
   // Manual query from popup (text + optional screenshot).
   if (message?.type === 'KLAI_TEXT' && typeof message.text === 'string') {
     const detail: { text: string; image?: string } = { text: message.text }
