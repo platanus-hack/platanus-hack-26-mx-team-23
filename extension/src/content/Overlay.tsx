@@ -486,9 +486,13 @@ function sortByRevealOrder(nodes: LayoutNode[]): LayoutNode[] {
   })
 }
 
+// Voice capture state type — mirrors the VoiceState type in the service worker.
+type VoiceIndicatorState = 'idle' | 'listening' | 'transcribing'
+
 export function Overlay() {
   const [videoRect, setVideoRect] = useState<DOMRect | null>(null)
   const [state, setState] = useState<OverlayState>({ status: 'idle' })
+  const [voiceState, setVoiceState] = useState<VoiceIndicatorState>('idle')
 
   // PlacementMap computed by the measure pass.
   const [placements, setPlacements] = useState<PlacementMap>(new Map())
@@ -673,6 +677,19 @@ export function Overlay() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Listen for voice pipeline state changes dispatched by the content script.
+  // Updates the recording indicator ('idle' | 'listening' | 'transcribing').
+  useEffect(() => {
+    function handleVoiceState(event: Event) {
+      const { state: vs } = (event as CustomEvent<{ state: string }>).detail
+      if (vs === 'listening' || vs === 'transcribing' || vs === 'idle') {
+        setVoiceState(vs as VoiceIndicatorState)
+      }
+    }
+    window.addEventListener('klai:voice-state', handleVoiceState)
+    return () => window.removeEventListener('klai:voice-state', handleVoiceState)
+  }, [])
+
   // Fallback video rect when no <video> is found: treat the full viewport as the rect.
   const effectiveRect = videoRect ?? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
 
@@ -847,6 +864,98 @@ export function Overlay() {
             }}
           >
             {state.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Voice capture indicator — anchored top-center of the video.
+          'listening': pulsing red dot + mic icon + "Listening..."
+          'transcribing': spinner dot + "Transcribing..."
+          'idle': nothing rendered (exits via AnimatePresence)
+      */}
+      <AnimatePresence>
+        {voiceState !== 'idle' && (
+          <motion.div
+            key="klai-voice-indicator"
+            initial={{ opacity: 0, y: -10, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.92 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+            style={{
+              position: 'fixed',
+              top: effectiveRect.top + SLOT_PADDING,
+              left: effectiveRect.left + effectiveRect.width / 2,
+              transform: 'translateX(-50%)',
+              background: 'rgba(10,10,14,0.72)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 999,
+              padding: '5px 14px 5px 10px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              pointerEvents: 'none',
+              zIndex: 2147483646,
+              fontFamily: 'system-ui, sans-serif',
+              fontSize: 12,
+              fontWeight: 500,
+              color: '#fff',
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {/* Pulsing dot — red for listening, white for transcribing */}
+            {voiceState === 'listening' ? (
+              <motion.span
+                animate={{ scale: [1, 1.45, 1], opacity: [1, 0.55, 1] }}
+                transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: '#ef4444',
+                  flexShrink: 0,
+                }}
+              />
+            ) : (
+              <motion.span
+                animate={{ opacity: [1, 0.3, 1] }}
+                transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut' }}
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: 'rgba(255,255,255,0.75)',
+                  flexShrink: 0,
+                }}
+              />
+            )}
+
+            {/* Mic SVG — shown only during listening */}
+            {voiceState === 'listening' && (
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{ flexShrink: 0, opacity: 0.9 }}
+              >
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            )}
+
+            {voiceState === 'listening' ? 'Listening...' : 'Transcribing...'}
           </motion.div>
         )}
       </AnimatePresence>

@@ -114,6 +114,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       stopWatchMode()
     }
   }
+
+  // Voice pipeline state from the service worker — forward to the overlay.
+  if (message?.type === 'KLAI_VOICE_STATE' && typeof message.state === 'string') {
+    window.dispatchEvent(
+      new CustomEvent('klai:voice-state', { detail: { state: message.state } }),
+    )
+  }
 })
 
 // ---------------------------------------------------------------------------

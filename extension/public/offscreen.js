@@ -65,6 +65,11 @@ async function startRecording() {
   mediaRecorder.onstop = () => finalize(mime)
   mediaRecorder.start()
 
+  // Signal that recording has actually started (getUserMedia and MediaRecorder.start()
+  // both succeeded). The service worker relays this to the active tab so the overlay
+  // can show a "Listening..." indicator.
+  send({ type: 'KLAI_RECORDING_STARTED' })
+
   // Silence detection via Web Audio RMS.
   audioCtx = new AudioContext()
   try {

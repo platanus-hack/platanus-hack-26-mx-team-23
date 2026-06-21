@@ -103,6 +103,26 @@ function openPermissionPage(): void {
   chrome.tabs.create({ url: chrome.runtime.getURL(PERMISSION_PATH) })
 }
 
+// ---------------------------------------------------------------------------
+// Voice state relay
+// ---------------------------------------------------------------------------
+// Sends the current voice pipeline state ('listening' | 'transcribing' | 'idle')
+// to the active tab's content script so the overlay can render a recording indicator.
+// Failures are swallowed — protected pages, missing content script, etc.
+// ---------------------------------------------------------------------------
+type VoiceState = 'listening' | 'transcribing' | 'idle'
+
+async function setVoiceState(state: VoiceState): Promise<void> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+    if (tab?.id == null) return
+    await ensureContentScript(tab.id)
+    await chrome.tabs.sendMessage(tab.id, { type: 'KLAI_VOICE_STATE', state })
+  } catch {
+    // Protected page or no content script — ignore silently.
+  }
+}
+
 // Ensure the offscreen recorder document exists (idempotent).
 async function ensureOffscreen(): Promise<void> {
   const has = await chrome.offscreen.hasDocument?.()
@@ -143,10 +163,14 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type === 'POPUP_START_RECORDING') {
     void startVoiceCapture()
+  } else if (msg?.type === 'KLAI_RECORDING_STARTED') {
+    // Offscreen recorder confirmed that MediaRecorder.start() succeeded.
+    void setVoiceState('listening')
   } else if (msg?.type === 'KLAI_AUDIO' && typeof msg.audio === 'string') {
     void handleAudio(msg.audio, msg.mimeType)
   } else if (msg?.type === 'KLAI_AUDIO_ERROR') {
     console.warn('[Klai SW] recorder error:', msg.error)
+    void setVoiceState('idle')
     if (typeof msg.error === 'string' && /permission|notallowed|denied|dismiss/i.test(msg.error)) {
       openPermissionPage()
     }
@@ -154,6 +178,9 @@ chrome.runtime.onMessage.addListener((msg) => {
 })
 
 async function handleAudio(audioDataUrl: string, mimeType?: string): Promise<void> {
+  // Recording finished — transition to transcribing immediately.
+  void setVoiceState('transcribing')
+
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
 
   // Screenshot of the visible tab (best-effort).
@@ -179,11 +206,13 @@ async function handleAudio(audioDataUrl: string, mimeType?: string): Promise<voi
     text = json.text ?? ''
   } catch (err) {
     console.error('[Klai SW] transcription failed:', err)
+    void setVoiceState('idle')
     return
   }
 
   if (!text.trim()) {
     console.warn('[Klai SW] empty transcript — ignoring.')
+    void setVoiceState('idle')
     return
   }
 
@@ -194,8 +223,14 @@ async function handleAudio(audioDataUrl: string, mimeType?: string): Promise<voi
     try {
       await ensureContentScript(tab.id)
       await chrome.tabs.sendMessage(tab.id, message)
+      // Transcript delivered successfully — pipeline complete, reset indicator.
+      void setVoiceState('idle')
     } catch (err) {
       console.warn('[Klai SW] could not deliver to tab:', err)
+      void setVoiceState('idle')
     }
+  } else {
+    // No valid tab — nothing to deliver.
+    void setVoiceState('idle')
   }
 }
