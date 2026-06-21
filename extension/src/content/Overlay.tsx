@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
 import {
   ResponseSchema,
   LayoutSchema,
@@ -277,16 +277,27 @@ function normalizeToLayout(raw: unknown): Layout | null {
 // If an incoming widget has the same signature as an existing instance, we
 // UPDATE that instance in place (keeping its position) rather than adding a copy.
 // ---------------------------------------------------------------------------
+// Normalize a string for identity comparison: lowercase, trimmed, collapsed
+// whitespace — so "Cruz Azul" and "CRUZ  AZUL " dedupe to the same widget.
+function norm(s: string): string {
+  return s.toLowerCase().trim().replace(/\s+/g, ' ')
+}
+
+// Identity signature used to dedupe accumulated widgets. It must use STABLE
+// identity fields only — never volatile values (score, minute, probability,
+// stat values, timer remaining) — otherwise a re-read with a changed score
+// would be treated as a new widget and duplicate the card.
 function widgetSignature(node: LayoutNode): string {
   const w = node.widget
-  if (w.type === 'scoreboard') return `scoreboard:${w.teams.map((t) => `${t.name}:${t.score}`).join(',')}`
-  if (w.type === 'alert') return `alert:${w.message}`
+  // Inherently single instances per video: one scoreboard / one momentum bar.
+  if (w.type === 'scoreboard') return 'scoreboard'
+  if (w.type === 'momentum') return 'momentum'
   if (w.type === 'timer') return `timer:${w.durationSeconds}`
-  if (w.type === 'statpanel') return `statpanel:${w.title ?? ''}:${w.stats.map((s) => s.label).join(',')}`
-  if (w.type === 'momentum') return `momentum:${w.teams.map((t) => `${t.name}:${t.probability}`).join(',')}`
-  if (w.type === 'infocard') return `infocard:${w.title}`
-  if (w.type === 'keypoints') return `keypoints:${(w.title ?? '')}:${w.points.join(',')}`
-  if (w.type === 'definition') return `definition:${w.term}`
+  if (w.type === 'alert') return `alert:${norm(w.message)}`
+  if (w.type === 'statpanel') return `statpanel:${norm(w.title ?? '')}`
+  if (w.type === 'infocard') return `infocard:${norm(w.title)}`
+  if (w.type === 'keypoints') return `keypoints:${norm(w.title ?? '')}`
+  if (w.type === 'definition') return `definition:${norm(w.term)}`
   return (w as { type: string }).type
 }
 
@@ -313,10 +324,22 @@ interface WidgetInstance {
   zIndex: number
   /**
    * Once the user drags the widget, we store its absolute viewport position
-   * here. When set, the widget renders at this position and is excluded from
-   * the collision resolver's relocation logic (but counted as an obstacle).
+   * here. When set, the widget is excluded from the collision resolver's
+   * relocation logic (but counted as an obstacle at its actual visual position).
+   *
+   * @deprecated Internal use only — kept as a non-null sentinel to signal
+   * "this widget has been manually positioned". Use dragOffset for the actual
+   * visual offset. Will be set to {x:0,y:0} as a dummy value when dragOffset
+   * is present, purely to preserve the existing obstacle/relocation guards.
    */
   manualPos: { x: number; y: number } | null
+  /**
+   * Drag offset (pixels) relative to the slot anchor (top/left from slotStyle).
+   * The widget's on-screen position = slot anchor + dragOffset.
+   * Persisted so the widget stays put across re-renders (e.g. new widget added).
+   * Null means the user has never dragged the widget.
+   */
+  dragOffset: { x: number; y: number } | null
   /** Whether this came from watch mode (proactive suggestion). */
   proactive: boolean
   /**
@@ -425,6 +448,11 @@ function deduplicateSlotsForInstances(
 // Overlap resolution (post-measure pass) across all active instances.
 // Dragged instances (manualPos set) are fixed — not relocated but treated as
 // obstacles for new widgets.
+//
+// With the motion-value drag model, each dragged widget's actual viewport
+// position is: slotAnchor(top/left) + dragOffset(x/y). The measuredRect from
+// the hidden layer is at the slot anchor (it uses slotStyle, not manualPos),
+// so we shift it by dragOffset to get the true obstacle rect.
 // ---------------------------------------------------------------------------
 function resolveOverlapsForInstances(
   instances: WidgetInstance[],
@@ -433,18 +461,24 @@ function resolveOverlapsForInstances(
 ): PlacementMap {
   const noGo = centerNoGoZone(videoRect)
 
-  // Place fixed (dragged) instances first — they own absolute screen positions.
+  // Place fixed (dragged) instances first — they are obstacles at their actual
+  // visual position (slot anchor + drag offset).
   const placed: Array<{ id: string; slot: Slot; rect: DOMRect; offsetY: number }> = []
   const result: PlacementMap = new Map()
 
   for (const inst of instances) {
     if (inst.manualPos !== null) {
-      // Use the measured rect at the manual position; if not measured yet, skip.
       const measuredRect = measuredRects.get(inst.id)
       if (measuredRect) {
-        // The widget renders at manualPos (via transform), so we approximate
-        // its obstacle rect at that position.
-        const rect = new DOMRect(inst.manualPos.x, inst.manualPos.y, measuredRect.width, measuredRect.height)
+        // Compute actual on-screen position: slot anchor rect shifted by the
+        // drag offset (stored in dragOffset, with manualPos as the sentinel).
+        const offset = inst.dragOffset ?? { x: 0, y: 0 }
+        const rect = new DOMRect(
+          measuredRect.x + offset.x,
+          measuredRect.y + offset.y,
+          measuredRect.width,
+          measuredRect.height,
+        )
         placed.push({ id: inst.id, slot: inst.slot, rect, offsetY: 0 })
         result.set(inst.id, { slot: inst.slot, offsetY: 0 })
       } else {
@@ -541,15 +575,31 @@ function CloseIcon() {
 // ---------------------------------------------------------------------------
 // DraggableWidget — wraps a widget component with drag, close button, and
 // pointer-events management. Keeps widget components unchanged.
+//
+// Drag model (motion-value base+offset):
+//   - x and y are useMotionValue instances passed directly to the motion.div
+//     via style={{ x, y }}. Framer-motion's drag moves the element by mutating
+//     these values — no CSS transform is left behind after onDragEnd.
+//   - The container's top/left (from slotStyle) is the SLOT ANCHOR and never
+//     changes during or after a drag. The visual position is always:
+//       viewport position = slot anchor (top/left CSS) + drag offset (x/y motion values)
+//   - On onDragEnd, we read x.get()/y.get() (the cumulative offset) and
+//     persist it to the instance via onDragEnd callback. On (re)mount, the
+//     motion values are initialized from the persisted initialOffset so the
+//     widget stays put when other widgets are added/removed.
+//   - dragConstraints uses a ref to a bounding element rather than fixed
+//     coordinates, avoiding fights with the motion-value positioning.
 // ---------------------------------------------------------------------------
 interface DraggableWidgetProps {
   instanceId: string
   widget: WidgetNode
   delay: number
   videoRect: DOMRect
+  /** Persisted drag offset (x, y) relative to the slot anchor. Null = never dragged. */
+  initialOffset: { x: number; y: number } | null
   onClose: (id: string) => void
+  /** Called with the cumulative x/y offset (motion value deltas) from the slot anchor. */
   onDragEnd: (id: string, x: number, y: number) => void
-  dragConstraints?: React.RefObject<Element>
 }
 
 function DraggableWidget({
@@ -557,6 +607,7 @@ function DraggableWidget({
   widget,
   delay,
   videoRect,
+  initialOffset,
   onClose,
   onDragEnd,
 }: DraggableWidgetProps) {
@@ -565,87 +616,107 @@ function DraggableWidget({
 
   const [isHovered, setIsHovered] = useState(false)
 
-  return (
-    <motion.div
-      drag
-      dragMomentum={false}
-      dragConstraints={{
-        left: videoRect.left - 50,
-        right: videoRect.right + 50,
-        top: videoRect.top - 50,
-        bottom: videoRect.bottom + 50,
-      }}
-      onDragEnd={(_event, info) => {
-        // info.point gives us the absolute position of the pointer at drag end.
-        // We store it as the widget's top-left anchor relative to the viewport.
-        // Offset by half the element size is not needed because framer-motion
-        // drag translates from the element's current position — we just need
-        // the cumulative offset which we compute from the element's bounding rect.
-        const el = document.getElementById(`klai-widget-${instanceId}`)
-        if (el) {
-          const rect = el.getBoundingClientRect()
-          onDragEnd(instanceId, rect.left, rect.top)
-        } else {
-          // Fallback: use pointer position
-          onDragEnd(instanceId, info.point.x, info.point.y)
-        }
-      }}
-      onHoverStart={() => setIsHovered(true)}
-      onHoverEnd={() => setIsHovered(false)}
-      style={{
-        position: 'relative',
-        display: 'inline-block',
-        cursor: 'grab',
-        pointerEvents: 'auto',
-        userSelect: 'none',
-      }}
-      whileDrag={{ cursor: 'grabbing' }}
-    >
-      <div id={`klai-widget-${instanceId}`} style={{ display: 'inline-block' }}>
-        <WidgetComponent data={widget} delay={delay} />
-      </div>
+  // Motion values drive the drag transform. Initialized from the persisted
+  // offset so the widget appears exactly where the user left it on re-mount.
+  const x = useMotionValue(initialOffset?.x ?? 0)
+  const y = useMotionValue(initialOffset?.y ?? 0)
 
-      {/* Close button — top-right corner of the widget */}
-      <AnimatePresence>
-        {(isHovered) && (
-          <motion.button
-            key="close-btn"
-            initial={{ opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.7 }}
-            transition={{ duration: 0.12 }}
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose(instanceId)
-            }}
-            style={{
-              position: 'absolute',
-              top: -8,
-              right: -8,
-              width: 20,
-              height: 20,
-              borderRadius: '50%',
-              background: 'rgba(30,30,36,0.88)',
-              border: '1px solid rgba(255,255,255,0.18)',
-              color: 'rgba(255,255,255,0.75)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              pointerEvents: 'auto',
-              padding: 0,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
-              backdropFilter: 'blur(4px)',
-              WebkitBackdropFilter: 'blur(4px)',
-              zIndex: 1,
-            }}
-            aria-label="Close widget"
-          >
-            <CloseIcon />
-          </motion.button>
-        )}
-      </AnimatePresence>
-    </motion.div>
+  // Constraint ref: attach a fixed-position overlay-sized div to constrain
+  // dragging to roughly the video area with a margin.
+  const constraintRef = useRef<HTMLDivElement>(null)
+
+  return (
+    <>
+      {/*
+        Invisible drag-constraint boundary element, absolutely positioned to
+        cover the video rect with a 50px margin. We mount it alongside the
+        widget so it is always in the DOM during drag.
+      */}
+      <div
+        ref={constraintRef}
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          top: videoRect.top - 50,
+          left: videoRect.left - 50,
+          width: videoRect.width + 100,
+          height: videoRect.height + 100,
+          pointerEvents: 'none',
+          zIndex: -1,
+        }}
+      />
+
+      <motion.div
+        drag
+        dragMomentum={false}
+        dragElastic={0.08}
+        dragConstraints={constraintRef}
+        style={{
+          x,
+          y,
+          position: 'relative',
+          display: 'inline-block',
+          cursor: 'grab',
+          pointerEvents: 'auto',
+          userSelect: 'none',
+        }}
+        whileDrag={{ cursor: 'grabbing' }}
+        onDragEnd={() => {
+          // Read the current cumulative offset from the motion values.
+          // This is the total displacement from the slot anchor (top/left CSS).
+          // NO getBoundingClientRect() needed — no jump possible because the
+          // container's top/left never changes; only x/y motion values move.
+          onDragEnd(instanceId, x.get(), y.get())
+        }}
+        onHoverStart={() => setIsHovered(true)}
+        onHoverEnd={() => setIsHovered(false)}
+      >
+        <div style={{ display: 'inline-block' }}>
+          <WidgetComponent data={widget} delay={delay} />
+        </div>
+
+        {/* Close button — top-right corner of the widget */}
+        <AnimatePresence>
+          {isHovered && (
+            <motion.button
+              key="close-btn"
+              initial={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.7 }}
+              transition={{ duration: 0.12 }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose(instanceId)
+              }}
+              style={{
+                position: 'absolute',
+                top: -8,
+                right: -8,
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                background: 'rgba(30,30,36,0.88)',
+                border: '1px solid rgba(255,255,255,0.18)',
+                color: 'rgba(255,255,255,0.75)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                pointerEvents: 'auto',
+                padding: 0,
+                boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                backdropFilter: 'blur(4px)',
+                WebkitBackdropFilter: 'blur(4px)',
+                zIndex: 1,
+              }}
+              aria-label="Close widget"
+            >
+              <CloseIcon />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </>
   )
 }
 
@@ -759,6 +830,7 @@ export function Overlay() {
               slot: node.slot,
               zIndex: node.zIndex ?? 10,
               manualPos: null,
+              dragOffset: null,
               proactive,
               insertionOrder: instanceCounter,
             })
@@ -819,10 +891,25 @@ export function Overlay() {
     measureRefs.current.delete(id)
   }, [])
 
-  // Persist drag position for a widget instance.
+  // Persist drag offset (relative to slot anchor) for a widget instance.
+  // x and y are the motion-value offsets from DraggableWidget.
   const handleDragEnd = useCallback((id: string, x: number, y: number) => {
     setInstances((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, manualPos: { x, y } } : i)),
+      prev.map((i) =>
+        i.id === id
+          ? {
+              ...i,
+              // dragOffset holds the actual visual delta from the slot anchor.
+              dragOffset: { x, y },
+              // manualPos acts as a non-null sentinel: the collision resolver
+              // reads it to exclude this widget from relocation and to compute
+              // its obstacle rect. We store the offset here too so the obstacle
+              // rect calculation in resolveOverlapsForInstances can derive the
+              // widget's actual viewport position (slotAnchor + dragOffset).
+              manualPos: { x, y },
+            }
+          : i,
+      ),
     )
   }, [])
 
@@ -1267,8 +1354,12 @@ export function Overlay() {
         Hidden measurement layer — ALL instances rendered at opacity:0,
         pointerEvents:none so the useLayoutEffect measure pass can collect
         real DOM rects for every widget immediately.
-        Instances with manualPos are rendered at their manual position for
-        accurate obstacle rect computation.
+
+        All instances use slotStyle for positioning in the measurement layer.
+        For dragged widgets, resolveOverlapsForInstances shifts the measured
+        rect by dragOffset to compute the true on-screen obstacle rect.
+        This means measurement position = slot anchor for every widget, which
+        is consistent and avoids stale absolute positions.
       */}
       {deduplicatedInstances.map((inst) => {
         const WidgetComponent = getWidget(inst.widget.type)
@@ -1278,11 +1369,9 @@ export function Overlay() {
         const resolvedSlot = (placement?.slot ?? inst.slot) as Slot
         const offsetY = placement?.offsetY ?? 0
 
-        // For dragged widgets, we only need a rough size estimate for obstacle computation.
-        // Use the slot style for non-dragged, and a fixed position for dragged.
-        const style: React.CSSProperties = inst.manualPos
-          ? { position: 'fixed', top: inst.manualPos.y, left: inst.manualPos.x }
-          : slotStyle(resolvedSlot, effectiveRect, offsetY)
+        // Always use slotStyle — the drag offset is applied separately in the
+        // overlap resolver (measuredRect + dragOffset = true obstacle rect).
+        const style: React.CSSProperties = slotStyle(resolvedSlot, effectiveRect, offsetY)
 
         return (
           <div
@@ -1309,15 +1398,17 @@ export function Overlay() {
           New instances are added to revealedIds one at a time via the reveal timer.
           Existing instances remain in revealedIds — they do NOT re-animate.
 
-        Dragged widgets:
-          When manualPos is set, the widget is rendered at that absolute position
-          using position:fixed + top/left instead of the slot style. The framer-motion
-          drag does NOT accumulate further (the widget's drag offset is reset to 0
-          on each mount), so we render it directly at the final stored position.
+        Drag model (motion-value base+offset):
+          The container div's top/left is ALWAYS the slot anchor — it never
+          changes on drag or after drag. The drag offset lives entirely inside
+          DraggableWidget as useMotionValue(x/y), initialized from inst.dragOffset
+          so the widget stays put across re-renders (e.g. when new widgets arrive).
+          onDragEnd persists the cumulative x/y motion-value offset, not an
+          absolute viewport position, so there is no jump when React re-renders.
 
         Pointer-events:
           The overlay root is pointerEvents:none (click-through for video).
-          Each DraggableWidget sets pointerEvents:auto on its container so
+          Each DraggableWidget sets pointerEvents:auto on its motion.div so
           drag and click events are captured only where a widget exists.
       */}
       <AnimatePresence mode="popLayout">
@@ -1328,23 +1419,15 @@ export function Overlay() {
             const resolvedSlot = (placement?.slot ?? inst.slot) as Slot
             const offsetY = placement?.offsetY ?? 0
 
-            // When the user has dragged the widget, render it at the stored
-            // absolute position (not slot-based). The drag handle itself starts
-            // with x=0,y=0 framer-motion transform — the visual position comes
-            // from top/left CSS.
-            const containerStyle: React.CSSProperties = inst.manualPos
-              ? {
-                  position: 'fixed',
-                  top: inst.manualPos.y,
-                  left: inst.manualPos.x,
-                  zIndex: inst.zIndex ?? 10,
-                  pointerEvents: 'none',
-                }
-              : {
-                  ...slotStyle(resolvedSlot, effectiveRect, offsetY),
-                  zIndex: inst.zIndex ?? 10,
-                  pointerEvents: 'none',
-                }
+            // The container ALWAYS uses the slot anchor as its top/left base.
+            // Drag displacement is applied inside DraggableWidget via motion
+            // values (x/y), not by changing this container's CSS position.
+            // This is the key fix: the base never changes, so there is no jump.
+            const containerStyle: React.CSSProperties = {
+              ...slotStyle(resolvedSlot, effectiveRect, offsetY),
+              zIndex: inst.zIndex ?? 10,
+              pointerEvents: 'none',
+            }
 
             return (
               <div key={inst.id} style={containerStyle}>
@@ -1353,6 +1436,7 @@ export function Overlay() {
                   widget={inst.widget}
                   delay={0}
                   videoRect={effectiveRect}
+                  initialOffset={inst.dragOffset}
                   onClose={closeInstance}
                   onDragEnd={handleDragEnd}
                 />
