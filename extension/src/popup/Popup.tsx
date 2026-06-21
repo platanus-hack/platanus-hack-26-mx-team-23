@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { recordClip, transcribeBlob } from '../lib/recorder'
 import { ensureContentScript } from '../lib/ensure-content-script'
 
 type Status = 'idle' | 'listening' | 'sending' | 'done' | 'error'
@@ -96,37 +95,17 @@ export function Popup() {
 
   // Record in the popup itself (it stays open) and show every step. getUserMedia
   // works without a prompt because the permission was granted via permission.html.
+  // Route voice through the offscreen recorder (the same path as the keyboard
+  // shortcut). It records even after the popup closes and drives the on-video
+  // "Listening / Transcribing" indicator, so the popup just kicks it off and closes.
   async function handleMic() {
     try {
-      setStatus('listening')
-      setStatusMsg('Grabando… habla y haz una pausa')
-      const blob = await recordClip()
-
-      setStatus('sending')
-      setStatusMsg('Transcribiendo…')
-      const transcript = await transcribeBlob(blob)
-      if (!transcript) {
-        setStatus('error')
-        setStatusMsg('No se captó audio. Reintenta.')
-        return
-      }
-
-      setText(transcript)
-      setStatusMsg(`"${transcript}" — enviando al video…`)
-      const image = await captureTab()
-      await sendToActiveTab(transcript, image)
-
-      setStatus('done')
-      setStatusMsg('Listo — mira el video')
-    } catch (err) {
-      setStatus('error')
-      const msg = err instanceof Error ? err.message : 'Error de micrófono'
-      setStatusMsg(
-        /denied|notallowed|permission|dismiss/i.test(msg)
-          ? 'Falta permiso de micrófono. Pulsa "Habilitar permiso" abajo.'
-          : msg
-      )
+      await chrome.runtime.sendMessage({ type: 'POPUP_START_RECORDING' })
+    } catch {
+      // Service worker handles errors (e.g. opens the mic permission page).
     }
+    // Close the popup so the user looks at the video, where the indicator appears.
+    window.close()
   }
 
   // Open the one-time microphone permission page (a popup cannot prompt for mic).
