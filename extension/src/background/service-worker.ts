@@ -85,9 +85,11 @@ async function handleDetect(
       return
     }
 
-    const data = (await res.json()) as { suggestion: unknown }
-    // data.suggestion is null when nothing notable was detected.
-    sendResponse(data.suggestion ?? null)
+    const data = (await res.json()) as { suggestion: unknown; scoreState?: unknown }
+    // Return both the suggestion and the scoreState to the content script.
+    // The content script dispatches klai:suggestion (for non-null suggestion)
+    // and klai:score-state (for scoreState) separately.
+    sendResponse({ suggestion: data.suggestion ?? null, scoreState: data.scoreState ?? null })
   } catch (err) {
     console.warn('[Klai SW] Detect fetch failed:', err)
     sendResponse(null)

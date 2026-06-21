@@ -30,10 +30,17 @@ function startWatchMode(): void {
     detectBusy = true
 
     try {
-      const suggestion = await chrome.runtime.sendMessage({ type: 'KLAI_DETECT' })
-      if (suggestion !== null && suggestion !== undefined) {
-        // Dispatch a custom event so Overlay.tsx can handle it.
-        window.dispatchEvent(new CustomEvent('klai:suggestion', { detail: suggestion }))
+      const response = await chrome.runtime.sendMessage({ type: 'KLAI_DETECT' })
+      if (response !== null && response !== undefined) {
+        const { suggestion, scoreState } = response as { suggestion: unknown; scoreState: unknown }
+        // Dispatch klai:suggestion when the backend detected something notable.
+        if (suggestion !== null && suggestion !== undefined) {
+          window.dispatchEvent(new CustomEvent('klai:suggestion', { detail: suggestion }))
+        }
+        // Always dispatch klai:score-state so the overlay can manage the fill-the-gap scoreboard.
+        if (scoreState !== null && scoreState !== undefined) {
+          window.dispatchEvent(new CustomEvent('klai:score-state', { detail: scoreState }))
+        }
       }
     } catch {
       // Runtime may be unavailable briefly during extension reload.

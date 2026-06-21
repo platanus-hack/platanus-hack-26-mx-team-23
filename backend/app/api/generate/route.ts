@@ -64,8 +64,8 @@ export async function POST(request: Request) {
   // --- No API key ---
   if (!apiKey) {
     if (isDetectMode) {
-      // In detect mode without a key, return null suggestion to avoid demo spam.
-      return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+      // In detect mode without a key, return null suggestion and null scoreState.
+      return Response.json({ suggestion: null, scoreState: null }, { headers: CORS_HEADERS })
     }
     console.warn(
       '[klai] ANTHROPIC_API_KEY is not set — returning hardcoded fallback layout.'
@@ -950,6 +950,15 @@ async function handleDetectMode(
 Look ONLY at the PRIMARY content — what is being actively shown in the MAIN video frame.
 Ignore scrolling tickers, unrelated scores, picture-in-picture, webcams, and promos.
 
+You must ALWAYS report score visibility (scorebugVisible) even when nothing notable is happening.
+
+SCOREBUG VISIBILITY:
+- A scorebug is the broadcast's own score graphic tied to the primary match — typically pinned top-left or bottom of the main frame.
+- Set scorebugVisible: true if the broadcast's scorebug is CURRENTLY VISIBLE and readable in the main video frame.
+- Set scorebugVisible: false if the scorebug is hidden, off-screen, or not present (e.g. during a replay, wide shot, cutaway, half-time graphics, or any moment the broadcast hides its own score).
+- When scorebugVisible is true AND you can read the score clearly: include home (name, score), away (name, score), and minute if visible.
+- When scorebugVisible is false OR the score is unreadable: omit home, away, minute.
+
 Is something NOTABLE happening in the PRIMARY content RIGHT NOW that would be worth surfacing as an overlay?
 
 Examples of notable moments (across different content types):
@@ -963,11 +972,11 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
 
   const stage1Response = await client.messages.create({
     model: 'claude-haiku-4-5', // Stage 1: fast cheap filter
-    max_tokens: 256,           // Tiny — only needs { notable, reason }
+    max_tokens: 512,           // Slightly larger — now also returns scorebug state
     tools: [
       {
         name: 'check_notable',
-        description: 'Report whether something notable is happening in the PRIMARY content right now.',
+        description: 'Report whether something notable is happening AND the current scorebug visibility status.',
         input_schema: {
           type: 'object' as const,
           properties: {
@@ -979,8 +988,35 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
               type: 'string',
               description: 'One short sentence explaining why notable is true or false.',
             },
+            scorebugVisible: {
+              type: 'boolean',
+              description: 'true if the broadcast\'s own scorebug is currently visible and readable in the main video frame. false if hidden, off-screen, or not present (e.g. during replays, cutaways, wide shots, half-time screens).',
+            },
+            home: {
+              type: 'object',
+              description: 'Home team — include ONLY when scorebugVisible is true and the score is readable.',
+              properties: {
+                name: { type: 'string', description: 'Home team name as shown in the scorebug.' },
+                score: { type: 'integer', minimum: 0, description: 'Home team score.' },
+              },
+              required: ['name', 'score'],
+            },
+            away: {
+              type: 'object',
+              description: 'Away team — include ONLY when scorebugVisible is true and the score is readable.',
+              properties: {
+                name: { type: 'string', description: 'Away team name as shown in the scorebug.' },
+                score: { type: 'integer', minimum: 0, description: 'Away team score.' },
+              },
+              required: ['name', 'score'],
+            },
+            minute: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Current match minute — include ONLY when scorebugVisible is true and the minute is readable.',
+            },
           },
-          required: ['notable', 'reason'],
+          required: ['notable', 'reason', 'scorebugVisible'],
         },
       },
     ],
@@ -996,12 +1032,34 @@ Call check_notable with your assessment. Be conservative: if you are unsure, ans
     return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
   }
 
-  const stage1Input = stage1Tool.input as { notable: boolean; reason: string }
-  console.log('[klai detect] Stage 1 (haiku):', stage1Input.notable, '—', stage1Input.reason)
+  const stage1Input = stage1Tool.input as {
+    notable: boolean
+    reason: string
+    scorebugVisible: boolean
+    home?: { name: string; score: number }
+    away?: { name: string; score: number }
+    minute?: number
+  }
+  console.log('[klai detect] Stage 1 (haiku):', stage1Input.notable, '—', stage1Input.reason, '| scorebugVisible:', stage1Input.scorebugVisible)
+
+  // Build scoreState from Stage 1 output — always returned regardless of notable.
+  const scoreState: {
+    scorebugVisible: boolean
+    home?: { name: string; score: number }
+    away?: { name: string; score: number }
+    minute?: number
+  } = { scorebugVisible: stage1Input.scorebugVisible }
+
+  if (stage1Input.scorebugVisible && stage1Input.home && stage1Input.away) {
+    scoreState.home = stage1Input.home
+    scoreState.away = stage1Input.away
+    if (stage1Input.minute !== undefined) scoreState.minute = stage1Input.minute
+  }
 
   // Gate: if Haiku says nothing notable, stop here — no Sonnet call.
+  // Still return scoreState so the extension can manage the fill-the-gap scoreboard.
   if (!stage1Input.notable) {
-    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+    return Response.json({ suggestion: null, scoreState }, { headers: CORS_HEADERS })
   }
 
   // -------------------------------------------------------------------------
@@ -1059,7 +1117,7 @@ data from the PRIMARY content in the main video frame.`
   // No tool call = Sonnet decided it wasn't actually notable (or couldn't read it confidently).
   if (!stage2Tool || stage2Tool.type !== 'tool_use') {
     console.log('[klai detect] Stage 2 (sonnet) declined — not notable or unreadable')
-    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+    return Response.json({ suggestion: null, scoreState }, { headers: CORS_HEADERS })
   }
 
   // Reshape flat nodes → nested LayoutNodes (same pattern as generate mode).
@@ -1128,7 +1186,7 @@ data from the PRIMARY content in the main video frame.`
   }
 
   if (validNodes.length === 0) {
-    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+    return Response.json({ suggestion: null, scoreState }, { headers: CORS_HEADERS })
   }
 
   const layoutCandidate = { type: 'layout' as const, nodes: validNodes }
@@ -1136,9 +1194,9 @@ data from the PRIMARY content in the main video frame.`
 
   if (!layoutParsed.success) {
     console.warn('[klai detect] Layout validation failed:', layoutParsed.error)
-    return Response.json({ suggestion: null }, { headers: CORS_HEADERS })
+    return Response.json({ suggestion: null, scoreState }, { headers: CORS_HEADERS })
   }
 
   console.log('[klai detect] Stage 2 (sonnet) confirmed notable — returning suggestion')
-  return Response.json({ suggestion: layoutParsed.data }, { headers: CORS_HEADERS })
+  return Response.json({ suggestion: layoutParsed.data, scoreState }, { headers: CORS_HEADERS })
 }

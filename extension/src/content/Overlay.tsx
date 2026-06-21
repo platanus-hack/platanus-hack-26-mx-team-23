@@ -397,6 +397,39 @@ const dismissedSignatures = new Set<string>()
 const dismissedAutoTypes = new Set<string>()
 
 // ---------------------------------------------------------------------------
+// Fill-the-gap scoreboard — module-level state.
+//
+// lastKnownScore is updated whenever a scoreState arrives with scorebugVisible:true
+// and readable home/away data. It is also updated when a scoreboard widget is
+// created via a manual query or a Sonnet suggestion (see accumulateLayout).
+//
+// When the broadcast hides its own scorebug (replay, cutaway, wide shot) and
+// we have lastKnownScore, a proactive AUTO scoreboard instance is shown so
+// the viewer never loses track of the score. When the broadcast's own scorebug
+// reappears, the AUTO scoreboard is removed — the broadcast covers it.
+// ---------------------------------------------------------------------------
+
+interface TeamScore {
+  name: string
+  score: number
+}
+
+interface ScoreState {
+  scorebugVisible: boolean
+  home?: TeamScore
+  away?: TeamScore
+  minute?: number
+}
+
+// Last known score populated from broadcast scorebug reads or manual scoreboard widgets.
+let lastKnownScore: { home: TeamScore; away: TeamScore; minute?: number } | null = null
+
+// Stable AUTO-scoreboard instance ID — assigned when the instance is first created
+// and reused across updates so we can find and remove it later. The ID must be
+// stable across event ticks; we use a prefix + timestamp set at creation time.
+let autoScoreboardInstanceId: string | null = null
+
+// ---------------------------------------------------------------------------
 // Widget instance model — the live list of active widgets.
 // Replaces the single-layout OverlayState.
 // ---------------------------------------------------------------------------
@@ -1005,6 +1038,11 @@ export function Overlay() {
               widget: node.widget,
               zIndex: node.zIndex ?? 10,
             }
+            // Sync lastKnownScore from manual scoreboard updates.
+            if (node.widget.type === 'scoreboard') {
+              const [h, a] = node.widget.teams
+              lastKnownScore = { home: h, away: a, minute: node.widget.minute }
+            }
           } else {
             // ADD as new instance.
             // Enforce cap: evict oldest non-dragged instance if needed.
@@ -1037,6 +1075,12 @@ export function Overlay() {
               placedOffsetY: 0,
             })
             newIds.push(id)
+
+            // Sync lastKnownScore from any new scoreboard widget (manual or proactive).
+            if (node.widget.type === 'scoreboard') {
+              const [h, a] = node.widget.teams
+              lastKnownScore = { home: h, away: a, minute: node.widget.minute }
+            }
 
             // Schedule auto-dismiss for new PROACTIVE alert instances only.
             // Manual alerts (proactive=false) are user-requested and must not auto-close.
@@ -1102,6 +1146,12 @@ export function Overlay() {
   // cannot re-open it. Proactive instances also add their type to
   // dismissedAutoTypes so the watch loop suppresses that type going forward.
   const closeInstance = useCallback((id: string, userInitiated = true) => {
+    // If the closed instance is the AUTO scoreboard, clear its tracked ID
+    // so future score-state ticks can re-create it once appropriate.
+    if (id === autoScoreboardInstanceId) {
+      autoScoreboardInstanceId = null
+    }
+
     // Clear any pending auto-dismiss timer for this instance — user beat it to it.
     const existingTimer = alertTimersRef.current.get(id)
     if (existingTimer !== undefined) {
@@ -1209,6 +1259,7 @@ export function Overlay() {
           dismissedSignatures.clear()
           dismissedAutoTypes.clear()
           lastSuggestionSignatureRef.current = ''
+          autoScoreboardInstanceId = null
           // Clear all alert timers and the cooldown map so watch mode gets a clean slate.
           for (const timer of alertTimersRef.current.values()) {
             clearTimeout(timer)
@@ -1316,6 +1367,158 @@ export function Overlay() {
   // Ref to the current instances so the suggestion handler can read it without stale closure.
   const instancesRef = useRef<WidgetInstance[]>([])
   instancesRef.current = instances
+
+  // ---------------------------------------------------------------------------
+  // Fill-the-gap scoreboard: klai:score-state handler.
+  //
+  // Each tick the service worker captures scoreState from Stage 1 (haiku).
+  // This handler decides whether to show or hide the AUTO scoreboard:
+  //
+  //   scorebugVisible === true  → broadcast shows its own score → hide/remove AUTO
+  //   scorebugVisible === false → broadcast hides score → show AUTO (if we have data
+  //                               and the user has not dismissed scoreboards)
+  //
+  // A MANUAL scoreboard (proactive=false) is never touched by this handler.
+  // dismissedAutoTypes('scoreboard') is respected — if the user closed the auto
+  // scoreboard, we do not re-open it until they either "Clear all" or issue a
+  // manual scoreboard query (which removes the type from dismissedAutoTypes).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    function handleScoreState(event: Event) {
+      const state = (event as CustomEvent<ScoreState>).detail
+      if (!state) return
+
+      // Update lastKnownScore when the broadcast is showing a readable score.
+      if (state.scorebugVisible && state.home && state.away) {
+        lastKnownScore = {
+          home: state.home,
+          away: state.away,
+          minute: state.minute,
+        }
+      }
+
+      if (state.scorebugVisible) {
+        // Broadcast shows its own score — remove AUTO scoreboard if present.
+        if (autoScoreboardInstanceId !== null) {
+          const idToRemove = autoScoreboardInstanceId
+          autoScoreboardInstanceId = null
+          // Remove from instances without marking as user-dismissed (proactive auto-remove).
+          // We do NOT add to dismissedAutoTypes here so that the auto scoreboard can
+          // reappear on the next cutaway.
+          setInstances((prev) => prev.filter((i) => i.id !== idToRemove))
+          setRevealedIds((prev) => {
+            const next = new Set(prev)
+            next.delete(idToRemove)
+            return next
+          })
+          measureRefs.current.delete(idToRemove)
+        }
+        return
+      }
+
+      // scorebugVisible === false — ensure AUTO scoreboard is visible if:
+      //   1. We have a last known score.
+      //   2. The user has not dismissed 'scoreboard' via the X button.
+      //   3. There is no manual scoreboard already on screen.
+      if (!lastKnownScore) return
+      if (dismissedAutoTypes.has('scoreboard')) return
+
+      const score = lastKnownScore
+
+      // Pre-compute the scoreboard widget and determine if we need a new instance.
+      // Generate the new ID outside the updater to avoid strict-mode double-call issues.
+      const scoreboardWidget = {
+        type: 'scoreboard' as const,
+        teams: [
+          { name: score.home.name, score: score.home.score },
+          { name: score.away.name, score: score.away.score },
+        ] as [{ name: string; score: number }, { name: string; score: number }],
+        ...(score.minute !== undefined ? { minute: score.minute } : {}),
+      }
+
+      // If no tracked auto instance exists yet, pre-allocate an ID so we can
+      // assign autoScoreboardInstanceId before the updater runs.
+      const pendingNewId = autoScoreboardInstanceId === null ? nextInstanceId() : null
+      if (pendingNewId !== null) {
+        autoScoreboardInstanceId = pendingNewId
+      }
+      const trackedId = autoScoreboardInstanceId!
+
+      setInstances((prev) => {
+        // Check for a manual scoreboard — never replace or hide it.
+        const hasManualScoreboard = prev.some(
+          (i) => i.widget.type === 'scoreboard' && !i.proactive,
+        )
+        if (hasManualScoreboard) return prev
+
+        // Check whether the AUTO scoreboard instance already exists.
+        const existingAutoIdx = prev.findIndex((i) => i.id === trackedId)
+
+        if (existingAutoIdx !== -1) {
+          // UPDATE existing AUTO scoreboard widget data in place (score may have changed).
+          const next = [...prev]
+          next[existingAutoIdx] = {
+            ...next[existingAutoIdx],
+            widget: scoreboardWidget,
+          }
+          return next
+        }
+
+        // ADD new AUTO scoreboard instance (pendingNewId path).
+        // Enforce cap: evict oldest non-dragged instance if needed.
+        const next = [...prev]
+        if (next.length >= MAX_INSTANCES) {
+          const evictIdx = next.reduce<number>((oldest, inst, idx) => {
+            if (inst.manualPos !== null) return oldest
+            if (oldest === -1) return idx
+            return inst.insertionOrder < next[oldest].insertionOrder ? idx : oldest
+          }, -1)
+          if (evictIdx !== -1) {
+            next.splice(evictIdx, 1)
+          }
+        }
+
+        next.push({
+          id: trackedId,
+          widget: scoreboardWidget,
+          slot: 'top-left',
+          zIndex: 10,
+          manualPos: null,
+          dragOffset: null,
+          proactive: true,
+          insertionOrder: instanceCounter,
+          placedSlot: null,
+          placedOffsetY: 0,
+        })
+
+        // Enqueue for progressive reveal.
+        revealQueueRef.current.push(trackedId)
+        if (revealTimerRef.current === null) {
+          const firstId = revealQueueRef.current.shift()
+          if (firstId) {
+            setRevealedIds((r) => new Set([...r, firstId]))
+          }
+          if (revealQueueRef.current.length > 0) {
+            const interval = setInterval(() => {
+              const nextRevealId = revealQueueRef.current.shift()
+              if (nextRevealId) setRevealedIds((r) => new Set([...r, nextRevealId]))
+              if (revealQueueRef.current.length === 0) {
+                clearInterval(interval)
+                revealTimerRef.current = null
+              }
+            }, REVEAL_INTERVAL_MS)
+            revealTimerRef.current = interval
+          }
+        }
+
+        return next
+      })
+    }
+
+    window.addEventListener('klai:score-state', handleScoreState)
+    return () => window.removeEventListener('klai:score-state', handleScoreState)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Listen for proactive suggestions from the watch-mode polling loop.
   useEffect(() => {
@@ -1644,6 +1847,7 @@ export function Overlay() {
               dismissedSignatures.clear()
               dismissedAutoTypes.clear()
               lastSuggestionSignatureRef.current = ''
+              autoScoreboardInstanceId = null
               // Clear all alert timers and the cooldown map so alerts can resurface.
               for (const timer of alertTimersRef.current.values()) {
                 clearTimeout(timer)
