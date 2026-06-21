@@ -329,6 +329,24 @@ function layoutSignature(layout: Layout): string {
 const dismissedSignatures = new Set<string>()
 
 // ---------------------------------------------------------------------------
+// Dismissed proactive widget TYPES — module-level (per content-script lifetime).
+//
+// Tracks which widget types the user has explicitly closed while they were
+// proactive (watch-mode) instances. The proactive accumulation path checks
+// this set by TYPE (not by full signature) so that cross-language or
+// semantically-equivalent duplicates (e.g. "DISCIPLINARY SUMMARY" EN and
+// "TARJETAS EN EL PARTIDO" ES) are both suppressed once the user dismisses
+// any one of them.
+//
+// The manual query path REMOVES a type from this set when it adds/updates a
+// widget of that type — re-enabling auto for that type so watch mode can
+// surface it again after the user has explicitly requested it.
+//
+// "Clear all": clears this set too — clean slate for watch mode.
+// ---------------------------------------------------------------------------
+const dismissedAutoTypes = new Set<string>()
+
+// ---------------------------------------------------------------------------
 // Widget instance model — the live list of active widgets.
 // Replaces the single-layout OverlayState.
 // ---------------------------------------------------------------------------
@@ -643,14 +661,15 @@ function CloseIcon() {
 //     persist it to the instance via onDragEnd callback. On (re)mount, the
 //     motion values are initialized from the persisted initialOffset so the
 //     widget stays put when other widgets are added/removed.
-//   - dragConstraints uses a ref to a bounding element rather than fixed
-//     coordinates, avoiding fights with the motion-value positioning.
+//   - No dragConstraints: the drag is free in all directions. Constraints in
+//     absolute viewport coordinates are in the wrong coordinate space for the
+//     base+offset model and clamp movement to one direction (only right/down).
+//     Free drag (no constraints) works correctly in all four directions.
 // ---------------------------------------------------------------------------
 interface DraggableWidgetProps {
   instanceId: string
   widget: WidgetNode
   delay: number
-  videoRect: DOMRect
   /** Persisted drag offset (x, y) relative to the slot anchor. Null = never dragged. */
   initialOffset: { x: number; y: number } | null
   onClose: (id: string) => void
@@ -662,7 +681,6 @@ function DraggableWidget({
   instanceId,
   widget,
   delay,
-  videoRect,
   initialOffset,
   onClose,
   onDragEnd,
@@ -677,36 +695,12 @@ function DraggableWidget({
   const x = useMotionValue(initialOffset?.x ?? 0)
   const y = useMotionValue(initialOffset?.y ?? 0)
 
-  // Constraint ref: attach a fixed-position overlay-sized div to constrain
-  // dragging to roughly the video area with a margin.
-  const constraintRef = useRef<HTMLDivElement>(null)
-
   return (
     <>
-      {/*
-        Invisible drag-constraint boundary element, absolutely positioned to
-        cover the video rect with a 50px margin. We mount it alongside the
-        widget so it is always in the DOM during drag.
-      */}
-      <div
-        ref={constraintRef}
-        aria-hidden="true"
-        style={{
-          position: 'fixed',
-          top: videoRect.top - 50,
-          left: videoRect.left - 50,
-          width: videoRect.width + 100,
-          height: videoRect.height + 100,
-          pointerEvents: 'none',
-          zIndex: -1,
-        }}
-      />
-
       <motion.div
         drag
         dragMomentum={false}
-        dragElastic={0.08}
-        dragConstraints={constraintRef}
+        dragElastic={0}
         style={{
           x,
           y,
@@ -852,18 +846,63 @@ export function Overlay() {
 
         for (const node of layout.nodes) {
           const sig = widgetSignature(node)
+          const widgetType = node.widget.type
 
-          // Proactive path: skip widgets the user explicitly dismissed.
-          // Manual path: re-enable dismissed signatures so future proactive
-          // updates can surface them again.
           if (proactive) {
+            // --- PROACTIVE PATH: dedup by widget TYPE, not by full signature ---
+            //
+            // The backend may return semantically identical data with different
+            // titles or in a different language (e.g. "DISCIPLINARY SUMMARY" EN
+            // and "TARJETAS EN EL PARTIDO" ES). Because widgetSignature includes
+            // the title, these produce different signatures but carry the same
+            // data. Deduping by TYPE collapses them to ONE widget per type.
+
+            // 1. Skip types the user explicitly dismissed via watch mode.
+            if (dismissedAutoTypes.has(widgetType)) continue
+
+            // 2. Check for an existing PROACTIVE instance of the same type.
+            const existingProactiveIdx = next.findIndex(
+              (i) => i.widget.type === widgetType && i.proactive,
+            )
+            if (existingProactiveIdx !== -1) {
+              // UPDATE the existing proactive instance in place — keep id/slot/position.
+              next[existingProactiveIdx] = {
+                ...next[existingProactiveIdx],
+                widget: node.widget,
+                zIndex: node.zIndex ?? 10,
+              }
+              continue
+            }
+
+            // 3. Skip if a MANUAL instance of the same type already exists —
+            //    the user explicitly requested it; don't clobber it with auto data.
+            const hasManualOfType = next.some(
+              (i) => i.widget.type === widgetType && !i.proactive,
+            )
+            if (hasManualOfType) continue
+
+            // 4. Also skip the per-signature dismissed set (backwards compat).
             if (dismissedSignatures.has(sig)) continue
+
+            // 5. No existing instance of this type — ADD as new proactive instance.
           } else {
+            // --- MANUAL PATH: identity-based dedup (unchanged behavior) ---
+            //
+            // The user explicitly asked for this widget. Re-enable its type and
+            // signature for future proactive updates, then check for an existing
+            // instance to update in place.
             dismissedSignatures.delete(sig)
+            dismissedAutoTypes.delete(widgetType)
           }
 
-          // Check for existing instance with same signature.
-          const existingIdx = next.findIndex((i) => widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex }) === sig)
+          // Check for existing instance with same signature (manual path uses
+          // identity dedup; proactive falls through here only for new additions).
+          const existingIdx = proactive
+            ? -1 // proactive updates were already handled above (continue)
+            : next.findIndex(
+                (i) =>
+                  widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex }) === sig,
+              )
 
           if (existingIdx !== -1) {
             // UPDATE in place — preserve id, slot, manualPos, and placed position.
@@ -962,6 +1001,13 @@ export function Overlay() {
         if (inst) {
           const sig = widgetSignature({ widget: inst.widget, slot: inst.slot, zIndex: inst.zIndex })
           dismissedSignatures.add(sig)
+          // If the closed widget was proactive, suppress its TYPE so the watch
+          // loop cannot re-open a same-type widget (even under a different title
+          // or language). The 12s auto-dismiss does NOT set this — the user never
+          // asked to suppress the type, so watch mode should still surface it.
+          if (inst.proactive) {
+            dismissedAutoTypes.add(inst.widget.type)
+          }
         }
       }
       return prev.filter((i) => i.id !== id)
@@ -1409,9 +1455,10 @@ export function Overlay() {
               measureRefs.current.clear()
               lastNodeFingerprintRef.current = ''
               setPlacements(new Map())
-              // Clear dismissed signatures so watch mode can resurface
+              // Clear dismissed signatures and types so watch mode can resurface
               // everything from a clean slate after "Clear all".
               dismissedSignatures.clear()
+              dismissedAutoTypes.clear()
               lastSuggestionSignatureRef.current = ''
               clearSuggestionTimer()
             }}
@@ -1505,13 +1552,16 @@ export function Overlay() {
           New instances are added to revealedIds one at a time via the reveal timer.
           Existing instances remain in revealedIds — they do NOT re-animate.
 
-        Drag model (motion-value base+offset):
+        Drag model (motion-value base+offset, free drag):
           The container div's top/left is ALWAYS the slot anchor — it never
           changes on drag or after drag. The drag offset lives entirely inside
           DraggableWidget as useMotionValue(x/y), initialized from inst.dragOffset
           so the widget stays put across re-renders (e.g. when new widgets arrive).
           onDragEnd persists the cumulative x/y motion-value offset, not an
           absolute viewport position, so there is no jump when React re-renders.
+          No dragConstraints are used — constraints in absolute viewport
+          coordinates are in the wrong space for this model and clamp movement
+          to only one direction. Free drag allows left, right, up, and down.
 
         Pointer-events:
           The overlay root is pointerEvents:none (click-through for video).
@@ -1542,7 +1592,6 @@ export function Overlay() {
                   instanceId={inst.id}
                   widget={inst.widget}
                   delay={0}
-                  videoRect={effectiveRect}
                   initialOffset={inst.dragOffset}
                   onClose={closeInstance}
                   onDragEnd={handleDragEnd}
