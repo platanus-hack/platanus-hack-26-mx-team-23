@@ -155,6 +155,7 @@ async function startVoiceCapture(): Promise<void> {
 
 // Keyboard shortcut → start a recording.
 chrome.commands.onCommand.addListener((command) => {
+  console.log('[Klai SW] command received:', command)
   if (command !== 'trigger-klai') return
   void startVoiceCapture()
 })

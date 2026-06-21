@@ -13,8 +13,8 @@
   "commands": {
     "trigger-klai": {
       "suggested_key": {
-        "default": "Ctrl+Shift+Y",
-        "mac": "Command+Shift+Y"
+        "default": "Alt+Shift+K",
+        "mac": "Alt+Shift+K"
       },
       "description": "Activate Klai by voice"
     }
