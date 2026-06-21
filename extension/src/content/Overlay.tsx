@@ -1,6 +1,36 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
 import { speak, unlockAudio } from '../lib/speak'
+
+// ---------------------------------------------------------------------------
+// Narration routing — content → SW → offscreen (primary, gesture-free path)
+// ---------------------------------------------------------------------------
+//
+// Chrome blocks HTMLAudioElement.play() in content scripts for proactive
+// (watch-mode) events that have no preceding user gesture. Routing narration
+// through the offscreen document (created with AUDIO_PLAYBACK reason) sidesteps
+// this restriction — the offscreen doc can play audio at any time.
+//
+// Flow:
+//   narrate(text)
+//     → chrome.runtime.sendMessage({ type: 'KLAI_NARRATE', text })
+//       → SW: ensureOffscreen() + sendMessage({ target:'offscreen', type:'KLAI_SPEAK' })
+//         → offscreen.js: fetch /api/tts → Audio.play() [no gesture needed]
+//         → on failure: send({ type:'KLAI_NARRATE_FALLBACK', text })
+//           → SW: chrome.tabs.sendMessage(tab.id, { type:'KLAI_NARRATE_FALLBACK' })
+//             → content script listener below: speak(text) [SpeechSynthesis fallback]
+//
+// The direct speak() import is kept ONLY for the KLAI_NARRATE_FALLBACK path.
+// Never call speak() directly for narration — that would bypass the offscreen doc
+// and silently fail on proactive events.
+
+function narrate(text: string): void {
+  if (!text.trim()) return
+  chrome.runtime.sendMessage({ type: 'KLAI_NARRATE', text }).catch(() => {
+    // SW not available (e.g. during hot-reload in dev) — fall back inline.
+    void speak(text)
+  })
+}
 // Mascot image lives in public/ and is loaded via chrome.runtime.getURL so it
 // resolves to a chrome-extension:// URL inside the host page (a bundled import
 // would resolve relative to the host page and 404).
@@ -1355,7 +1385,7 @@ export function Overlay() {
         const combined = pendingNarrationOpsRef.current
           .map((op) => op.phrase)
           .join('. ')
-        speak(combined)
+        narrate(combined)
         pendingNarrationOpsRef.current = []
       }
     },
@@ -1513,8 +1543,8 @@ export function Overlay() {
           setNarrationEnabled(action.enabled)
           chrome.storage.local.set({ narration: action.enabled })
           if (action.enabled) {
-            // Speak a short confirmation so the user knows narration is active.
-            speak('Narración activada')
+            // Narrate confirmation through the offscreen doc (same reliable path).
+            narrate('Narración activada')
           } else {
             // Stop any ongoing speech immediately when narration is turned off.
             window.speechSynthesis.cancel()
@@ -1781,7 +1811,7 @@ export function Overlay() {
         if (lastAutoScoreHashRef.current !== scoreHash) {
           lastAutoScoreHashRef.current = scoreHash
           const phrase = buildSpokenPhrase(scoreboardWidget)
-          if (phrase) speak(phrase)
+          if (phrase) narrate(phrase)
         }
       }
     }
@@ -1869,9 +1899,24 @@ export function Overlay() {
     return () => window.removeEventListener('klai:narration', handleNarration)
   }, [])
 
+  // Listen for KLAI_NARRATE_FALLBACK from the service worker.
+  // Fired when the offscreen doc's ElevenLabs fetch fails — use SpeechSynthesis
+  // as a last-resort fallback so the user still hears narration.
+  useEffect(() => {
+    function handleNarrateFallback(
+      msg: { type: string; text?: string },
+      _sender: chrome.runtime.MessageSender,
+    ) {
+      if (msg?.type === 'KLAI_NARRATE_FALLBACK' && typeof msg.text === 'string') {
+        void speak(msg.text)
+      }
+    }
+    chrome.runtime.onMessage.addListener(handleNarrateFallback)
+    return () => chrome.runtime.onMessage.removeListener(handleNarrateFallback)
+  }, [])
+
   // Unlock the shared audio element on the user's first gesture so that
-  // subsequent proactive/watch-mode narration (which fires without a gesture)
-  // is not blocked by Chrome's autoplay policy.
+  // the SpeechSynthesis fallback path is primed for subsequent use.
   useEffect(() => {
     function handleFirstGesture() {
       unlockAudio()

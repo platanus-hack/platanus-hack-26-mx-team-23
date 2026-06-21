@@ -143,8 +143,90 @@ function finalize(mime) {
   reader.readAsDataURL(blob)
 }
 
+// ---------------------------------------------------------------------------
+// Narration audio playback (AUDIO_PLAYBACK reason — no user-gesture required).
+// ---------------------------------------------------------------------------
+
+// Module-level Audio element for TTS narration. Reused across utterances so
+// the AUDIO_PLAYBACK offscreen reason keeps it active.
+let narrationAudio = null
+let narrationObjectUrl = null
+
+/**
+ * Stop any currently-playing narration clip and revoke its object URL.
+ */
+function stopNarration() {
+  if (narrationAudio) {
+    narrationAudio.pause()
+    narrationAudio.src = ''
+  }
+  if (narrationObjectUrl) {
+    URL.revokeObjectURL(narrationObjectUrl)
+    narrationObjectUrl = null
+  }
+}
+
+/**
+ * Fetch TTS audio from the backend and play it.
+ * Falls back by sending KLAI_NARRATE_FALLBACK to the service worker if the
+ * fetch fails or returns a non-ok status.
+ */
+async function speakOffscreen(text, backendUrl) {
+  if (!text || !text.trim()) return
+
+  // Stop any previous clip before starting a new one.
+  stopNarration()
+
+  try {
+    const res = await fetch(`${backendUrl}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+
+    if (!res.ok) {
+      console.warn('[Klai offscreen] /api/tts returned', res.status, '— sending fallback')
+      send({ type: 'KLAI_NARRATE_FALLBACK', text })
+      return
+    }
+
+    const blob = await res.blob()
+    narrationObjectUrl = URL.createObjectURL(blob)
+
+    narrationAudio = new Audio(narrationObjectUrl)
+
+    narrationAudio.addEventListener('ended', () => {
+      if (narrationObjectUrl) {
+        URL.revokeObjectURL(narrationObjectUrl)
+        narrationObjectUrl = null
+      }
+    }, { once: true })
+
+    narrationAudio.addEventListener('error', (e) => {
+      console.warn('[Klai offscreen] narration playback error:', e)
+      if (narrationObjectUrl) {
+        URL.revokeObjectURL(narrationObjectUrl)
+        narrationObjectUrl = null
+      }
+      send({ type: 'KLAI_NARRATE_FALLBACK', text })
+    }, { once: true })
+
+    await narrationAudio.play()
+  } catch (err) {
+    console.warn('[Klai offscreen] speakOffscreen failed:', err)
+    if (narrationObjectUrl) {
+      URL.revokeObjectURL(narrationObjectUrl)
+      narrationObjectUrl = null
+    }
+    send({ type: 'KLAI_NARRATE_FALLBACK', text })
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.target === 'offscreen' && msg.type === 'START_RECORDING') {
     startRecording()
+  } else if (msg && msg.target === 'offscreen' && msg.type === 'KLAI_SPEAK') {
+    // Narration request from the service worker — play via AUDIO_PLAYBACK offscreen doc.
+    void speakOffscreen(msg.text, msg.backendUrl)
   }
 })
