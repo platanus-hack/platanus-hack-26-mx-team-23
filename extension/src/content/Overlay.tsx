@@ -1173,6 +1173,7 @@ export function Overlay() {
                 pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: true, reset: true })
               }
               // Narrate the updated widget if data changed.
+              // Proactive updates respect the narration toggle; manual updates always narrate.
               const newHash = widgetContentHash(node.widget)
               if (narrationEnabledRef.current && lastSpokenHashRef.current.get(updatedId) !== newHash) {
                 const phrase = buildSpokenPhrase(node.widget)
@@ -1244,9 +1245,10 @@ export function Overlay() {
             if (node.widget.type !== 'alert') {
               pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: false, reset: true })
             }
-            // Narrate updated manual widget if data changed.
+            // Narrate updated widget if data changed.
+            // Manual queries (!proactive) always narrate; proactive respects the narration toggle.
             const newHash = widgetContentHash(node.widget)
-            if (narrationEnabledRef.current && lastSpokenHashRef.current.get(updatedId) !== newHash) {
+            if ((!proactive || narrationEnabledRef.current) && lastSpokenHashRef.current.get(updatedId) !== newHash) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
@@ -1292,7 +1294,8 @@ export function Overlay() {
             }
 
             // Narrate newly added widget.
-            if (narrationEnabledRef.current) {
+            // Manual queries (!proactive) always narrate; proactive respects the narration toggle.
+            if (!proactive || narrationEnabledRef.current) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 const hash = widgetContentHash(node.widget)
