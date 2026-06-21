@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ResponseSchema,
@@ -7,6 +7,7 @@ import {
   type Layout,
   type LayoutNode,
   type Slot,
+  type WidgetNode,
 } from '../lib/schema'
 import { getWidget } from '../lib/registry'
 
@@ -98,6 +99,9 @@ const STACK_GAP = 8
 // Interval (ms) between successive widget reveals during progressive assembly.
 // Each node appears this many milliseconds after the previous one.
 const REVEAL_INTERVAL_MS = 200
+
+// Maximum number of live widget instances before oldest non-dragged ones are dropped.
+const MAX_INSTANCES = 8
 
 // Reveal order: widget types listed here enter first (ascending index = earlier).
 // Types not listed fall after all listed types, then sorted by ascending zIndex.
@@ -212,7 +216,6 @@ function slotStyle(
 
   return {
     position: 'fixed',
-    pointerEvents: 'none',
     ...positions[slot],
   }
 }
@@ -269,42 +272,131 @@ function normalizeToLayout(raw: unknown): Layout | null {
 }
 
 // ---------------------------------------------------------------------------
-// Stable node key
+// Per-widget signature — used for accumulation dedup.
+// Computes a signature for a single LayoutNode (type + key identifying fields).
+// If an incoming widget has the same signature as an existing instance, we
+// UPDATE that instance in place (keeping its position) rather than adding a copy.
 // ---------------------------------------------------------------------------
-// Derived from the widget's TYPE and its ORIGINAL (model-assigned) slot — NOT
-// the resolved slot after collision resolution. This keeps the AnimatePresence
-// key stable across relocations: a relocated widget does NOT remount; only its
-// CSS position changes. If the model assigns a different widget type to the
-// same slot on a new query, the old widget exits and the new one enters.
-// ---------------------------------------------------------------------------
-function nodeKey(node: LayoutNode): string {
-  return `${node.slot}::${node.widget.type}`
+function widgetSignature(node: LayoutNode): string {
+  const w = node.widget
+  if (w.type === 'scoreboard') return `scoreboard:${w.teams.map((t) => `${t.name}:${t.score}`).join(',')}`
+  if (w.type === 'alert') return `alert:${w.message}`
+  if (w.type === 'timer') return `timer:${w.durationSeconds}`
+  if (w.type === 'statpanel') return `statpanel:${w.title ?? ''}:${w.stats.map((s) => s.label).join(',')}`
+  if (w.type === 'momentum') return `momentum:${w.teams.map((t) => `${t.name}:${t.probability}`).join(',')}`
+  if (w.type === 'infocard') return `infocard:${w.title}`
+  if (w.type === 'keypoints') return `keypoints:${(w.title ?? '')}:${w.points.join(',')}`
+  if (w.type === 'definition') return `definition:${w.term}`
+  return (w as { type: string }).type
+}
+
+// Derive a lightweight signature from a full layout for proactive suggestion dedup.
+function layoutSignature(layout: Layout): string {
+  return layout.nodes
+    .map((n) => widgetSignature(n))
+    .sort()
+    .join('|')
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: Slot deduplication (pre-render, pure JS, no DOM)
+// Widget instance model — the live list of active widgets.
+// Replaces the single-layout OverlayState.
 // ---------------------------------------------------------------------------
-// If two nodes are assigned the same slot by the model, the higher-priority
-// widget stays; the lower-priority one is relocated to the nearest free slot
-// (in ALL_SLOTS order, skipping occupied slots and center-intersecting slots).
-//
-// "Nearest" = first available slot in the ALL_SLOTS priority order that is not
-// already occupied by any node in the deduplicated set.
-// ---------------------------------------------------------------------------
-function deduplicateSlots(nodes: LayoutNode[], videoRect: DOMRect): LayoutNode[] {
-  const noGo = centerNoGoZone(videoRect)
-  const slotMap = new Map<string, LayoutNode>()
+interface WidgetInstance {
+  /** Stable unique id — used as React key and ref key. */
+  id: string
+  /** The validated widget data. */
+  widget: WidgetNode
+  /** Initial/auto slot from the layout or collision resolver. */
+  slot: Slot
+  /** zIndex hint from the original layout node. */
+  zIndex: number
+  /**
+   * Once the user drags the widget, we store its absolute viewport position
+   * here. When set, the widget renders at this position and is excluded from
+   * the collision resolver's relocation logic (but counted as an obstacle).
+   */
+  manualPos: { x: number; y: number } | null
+  /** Whether this came from watch mode (proactive suggestion). */
+  proactive: boolean
+  /**
+   * Monotonically increasing insertion counter — used to sort instances for
+   * progressive reveal ordering and for evicting the oldest when we exceed
+   * MAX_INSTANCES.
+   */
+  insertionOrder: number
+}
 
-  // Sort by priority descending so higher-priority nodes claim their slot first.
-  const sorted = [...nodes].sort(
-    (a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type),
+// ---------------------------------------------------------------------------
+// Loading / error indicator state — kept separate from the instance list.
+// ---------------------------------------------------------------------------
+type StatusState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+
+// Returns the reveal-order rank for a widget type.
+// Lower rank = reveals earlier. Types absent from REVEAL_ORDER get rank = Infinity.
+function revealRank(type: string): number {
+  const idx = REVEAL_ORDER.indexOf(type)
+  return idx === -1 ? Infinity : idx
+}
+
+// Voice capture state type — mirrors the VoiceState type in the service worker.
+type VoiceIndicatorState = 'idle' | 'listening' | 'transcribing'
+
+// ---------------------------------------------------------------------------
+// Resolved placement state
+// ---------------------------------------------------------------------------
+// After the measure pass, each instance's final slot and vertical offset are
+// stored here. Keys are instance IDs.
+// ---------------------------------------------------------------------------
+interface ResolvedPlacement {
+  slot: Slot
+  offsetY: number
+}
+
+type PlacementMap = Map<string, ResolvedPlacement>
+
+// ---------------------------------------------------------------------------
+// Slot deduplication across ALL active instances (pre-render, pure JS, no DOM)
+// ---------------------------------------------------------------------------
+// If two instances (existing + incoming) are assigned the same slot, the higher-
+// priority widget stays; the lower-priority one is relocated to the nearest free
+// slot. Dragged instances (manualPos set) are FIXED and excluded from relocation
+// but DO count as obstacles (their slots are considered occupied).
+// ---------------------------------------------------------------------------
+function deduplicateSlotsForInstances(
+  instances: WidgetInstance[],
+  videoRect: DOMRect,
+): WidgetInstance[] {
+  const noGo = centerNoGoZone(videoRect)
+
+  // Dragged widgets are fixed — their slots are pre-occupied obstacles.
+  const fixedSlots = new Set<Slot>(
+    instances.filter((i) => i.manualPos !== null).map((i) => i.slot),
   )
 
-  const relocated: LayoutNode[] = []
+  const slotMap = new Map<Slot, WidgetInstance>()
+  // Pre-populate fixed instances.
+  for (const inst of instances) {
+    if (inst.manualPos !== null) {
+      slotMap.set(inst.slot, inst)
+    }
+  }
 
-  for (const node of sorted) {
-    if (!slotMap.has(node.slot)) {
-      slotMap.set(node.slot, node)
+  // Sort non-dragged instances by priority descending so higher-priority nodes
+  // claim their slot first.
+  const nonFixed = instances
+    .filter((i) => i.manualPos === null)
+    .sort((a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type))
+
+  const result: WidgetInstance[] = [...instances.filter((i) => i.manualPos !== null)]
+
+  for (const inst of nonFixed) {
+    if (!slotMap.has(inst.slot) && !fixedSlots.has(inst.slot)) {
+      slotMap.set(inst.slot, inst)
+      result.push(inst)
     } else {
       // Slot occupied — find the nearest free, non-center-colliding slot.
       const freeSlot = ALL_SLOTS.find((s) => {
@@ -315,97 +407,81 @@ function deduplicateSlots(nodes: LayoutNode[], videoRect: DOMRect): LayoutNode[]
       })
 
       if (freeSlot) {
-        const movedNode: LayoutNode = { ...node, slot: freeSlot }
-        slotMap.set(freeSlot, movedNode)
-        relocated.push(movedNode)
+        const movedInst: WidgetInstance = { ...inst, slot: freeSlot }
+        slotMap.set(freeSlot, movedInst)
+        result.push(movedInst)
       } else {
-        // No free slot at all — keep the node in its original slot (will be
-        // handled by the overlap-resolution pass with a vertical offset instead).
-        slotMap.set(node.slot, node)
+        // No free slot — keep original slot (overlap resolver will handle it).
+        slotMap.set(inst.slot, inst)
+        result.push(inst)
       }
     }
   }
 
-  return [...slotMap.values()]
+  return result
 }
 
 // ---------------------------------------------------------------------------
-// Resolved placement state
+// Overlap resolution (post-measure pass) across all active instances.
+// Dragged instances (manualPos set) are fixed — not relocated but treated as
+// obstacles for new widgets.
 // ---------------------------------------------------------------------------
-// After the measure pass, each node's final slot and vertical offset are stored
-// here. Keys match nodeKey(node) with the ORIGINAL slot.
-// ---------------------------------------------------------------------------
-interface ResolvedPlacement {
-  slot: Slot
-  offsetY: number
-}
-
-type PlacementMap = Map<string, ResolvedPlacement>
-
-// ---------------------------------------------------------------------------
-// Overlap resolution (post-measure pass)
-// ---------------------------------------------------------------------------
-// Given measured rects (keyed by nodeKey) and the deduplicated node list,
-// detect pairwise intersections and relocate the lower-priority widget.
-//
-// Relocation strategy:
-//   1. Try all remaining free slots (not occupied by any node in the placed set).
-//   2. Among those, pick the first that doesn't intersect the center no-go zone
-//      and doesn't intersect any already-placed widget rect.
-//   3. If no clean slot exists, apply a vertical stack offset: push the lower-
-//      priority widget down (for top-* slots) or up (for bottom-* slots) by the
-//      overlapping widget's height + STACK_GAP.
-//
-// Returns a PlacementMap: originalKey → { resolvedSlot, offsetY }.
-// ---------------------------------------------------------------------------
-function resolveOverlaps(
-  nodes: LayoutNode[],
+function resolveOverlapsForInstances(
+  instances: WidgetInstance[],
   measuredRects: Map<string, DOMRect>,
   videoRect: DOMRect,
 ): PlacementMap {
   const noGo = centerNoGoZone(videoRect)
 
-  // Work with a mutable array of placements sorted by priority descending.
-  // Higher priority widgets are placed first; they own their position.
-  const prioritized = [...nodes].sort(
-    (a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type),
-  )
-
-  const placed: Array<{ key: string; slot: Slot; rect: DOMRect; offsetY: number }> = []
+  // Place fixed (dragged) instances first — they own absolute screen positions.
+  const placed: Array<{ id: string; slot: Slot; rect: DOMRect; offsetY: number }> = []
   const result: PlacementMap = new Map()
 
-  for (const node of prioritized) {
-    const key = nodeKey(node)
-    const measuredRect = measuredRects.get(key)
+  for (const inst of instances) {
+    if (inst.manualPos !== null) {
+      // Use the measured rect at the manual position; if not measured yet, skip.
+      const measuredRect = measuredRects.get(inst.id)
+      if (measuredRect) {
+        // The widget renders at manualPos (via transform), so we approximate
+        // its obstacle rect at that position.
+        const rect = new DOMRect(inst.manualPos.x, inst.manualPos.y, measuredRect.width, measuredRect.height)
+        placed.push({ id: inst.id, slot: inst.slot, rect, offsetY: 0 })
+        result.set(inst.id, { slot: inst.slot, offsetY: 0 })
+      } else {
+        result.set(inst.id, { slot: inst.slot, offsetY: 0 })
+      }
+    }
+  }
+
+  // Sort non-dragged instances by priority descending.
+  const nonFixed = instances
+    .filter((i) => i.manualPos === null)
+    .sort((a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type))
+
+  for (const inst of nonFixed) {
+    const measuredRect = measuredRects.get(inst.id)
 
     if (!measuredRect) {
-      // Widget not yet measured — keep original slot, no offset.
-      result.set(key, { slot: node.slot as Slot, offsetY: 0 })
+      result.set(inst.id, { slot: inst.slot, offsetY: 0 })
       continue
     }
 
     const w = measuredRect.width
     const h = measuredRect.height
 
-    // Try the node's current slot first.
-    let chosenSlot: Slot = node.slot as Slot
+    let chosenSlot: Slot = inst.slot
     let chosenOffsetY = 0
     let chosenRect = measuredRect
 
-    // Check if the current slot intersects the center no-go zone.
     const slotInCenter = rectsIntersect(measuredRect, noGo)
-
-    // Check if this rect collides with any already-placed widget.
     const collidingWith = placed.find((p) => rectsIntersect(measuredRect, p.rect))
 
     if (slotInCenter || collidingWith) {
-      // Attempt to find a clean alternative slot.
       const occupiedSlots = new Set(placed.map((p) => p.slot))
       const candidateSlot = ALL_SLOTS.find((s) => {
         if (occupiedSlots.has(s)) return false
         const estRect = estimateSlotRect(s, videoRect, w, h)
         if (rectsIntersect(estRect, noGo)) return false
-        // Make sure it doesn't collide with any already-placed widget.
         return !placed.some((p) => rectsIntersect(estRect, p.rect))
       })
 
@@ -414,110 +490,192 @@ function resolveOverlaps(
         chosenOffsetY = 0
         chosenRect = estimateSlotRect(candidateSlot, videoRect, w, h)
       } else if (collidingWith) {
-        // Last resort: stack vertically within the same horizontal region.
-        // For top-* slots, push down; for bottom-* slots, push up.
-        const isBottom = node.slot.startsWith('bottom')
-        const stackOffset = isBottom
-          ? collidingWith.rect.height + STACK_GAP
-          : collidingWith.rect.height + STACK_GAP
+        const isBottom = inst.slot.startsWith('bottom')
+        const stackOffset = collidingWith.rect.height + STACK_GAP
 
-        chosenSlot = node.slot as Slot
+        chosenSlot = inst.slot
         chosenOffsetY = stackOffset
-        // Approximate new rect after offset.
         const dy = isBottom ? -stackOffset : stackOffset
         chosenRect = new DOMRect(measuredRect.x, measuredRect.y + dy, w, h)
       }
-      // If slotInCenter but no collision and no free slot: keep original
-      // (can't fix center overlap without a free slot — let backend hint handle it).
     }
 
-    placed.push({ key, slot: chosenSlot, rect: chosenRect, offsetY: chosenOffsetY })
-    result.set(key, { slot: chosenSlot, offsetY: chosenOffsetY })
+    placed.push({ id: inst.id, slot: chosenSlot, rect: chosenRect, offsetY: chosenOffsetY })
+    result.set(inst.id, { slot: chosenSlot, offsetY: chosenOffsetY })
   }
 
   return result
 }
 
-// ---------------------------------------------------------------------------
 // Auto-dismiss timeout for proactive suggestions (ms).
-// ---------------------------------------------------------------------------
 const SUGGESTION_AUTO_DISMISS_MS = 12000
 
-// Derive a lightweight signature from a layout for dedup purposes.
-// Uses widget types + key identifying fields so identical detections are ignored.
-function layoutSignature(layout: Layout): string {
-  return layout.nodes
-    .map((n) => {
-      const w = n.widget
-      if (w.type === 'scoreboard') return `scoreboard:${w.teams.map((t) => `${t.name}:${t.score}`).join(',')}`
-      if (w.type === 'alert') return `alert:${w.message}`
-      if (w.type === 'timer') return `timer:${w.durationSeconds}`
-      if (w.type === 'statpanel') return `statpanel:${w.title ?? ''}:${w.stats.map((s) => s.label).join(',')}`
-      if (w.type === 'momentum') return `momentum:${w.teams.map((t) => `${t.name}:${t.probability}`).join(',')}`
-      if (w.type === 'infocard') return `infocard:${w.title}`
-      if (w.type === 'keypoints') return `keypoints:${(w.title ?? '')}:${w.points.join(',')}`
-      if (w.type === 'definition') return `definition:${w.term}`
-      return (w as { type: string }).type
-    })
-    .sort()
-    .join('|')
+// Counter for generating stable instance IDs.
+let instanceCounter = 0
+
+function nextInstanceId(): string {
+  return `klai-inst-${++instanceCounter}`
 }
 
-type OverlayState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'layout'; data: Layout; proactive?: boolean }
-  | { status: 'error'; message: string }
-
-// Returns the reveal-order rank for a widget type.
-// Lower rank = reveals earlier. Types absent from REVEAL_ORDER get rank = Infinity.
-function revealRank(type: string): number {
-  const idx = REVEAL_ORDER.indexOf(type)
-  return idx === -1 ? Infinity : idx
+// ---------------------------------------------------------------------------
+// Close button SVG — inline, no emoji.
+// ---------------------------------------------------------------------------
+function CloseIcon() {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <line x1="1" y1="1" x2="9" y2="9" />
+      <line x1="9" y1="1" x2="1" y2="9" />
+    </svg>
+  )
 }
 
-// Sorts layout nodes into the deliberate reveal order.
-// Primary: REVEAL_ORDER index (ascending). Secondary: zIndex (ascending).
-function sortByRevealOrder(nodes: LayoutNode[]): LayoutNode[] {
-  return [...nodes].sort((a, b) => {
-    const rankDiff = revealRank(a.widget.type) - revealRank(b.widget.type)
-    if (rankDiff !== 0) return rankDiff
-    return (a.zIndex ?? 10) - (b.zIndex ?? 10)
-  })
+// ---------------------------------------------------------------------------
+// DraggableWidget — wraps a widget component with drag, close button, and
+// pointer-events management. Keeps widget components unchanged.
+// ---------------------------------------------------------------------------
+interface DraggableWidgetProps {
+  instanceId: string
+  widget: WidgetNode
+  delay: number
+  videoRect: DOMRect
+  onClose: (id: string) => void
+  onDragEnd: (id: string, x: number, y: number) => void
+  dragConstraints?: React.RefObject<Element>
 }
 
-// Voice capture state type — mirrors the VoiceState type in the service worker.
-type VoiceIndicatorState = 'idle' | 'listening' | 'transcribing'
+function DraggableWidget({
+  instanceId,
+  widget,
+  delay,
+  videoRect,
+  onClose,
+  onDragEnd,
+}: DraggableWidgetProps) {
+  const WidgetComponent = getWidget(widget.type)
+  if (!WidgetComponent) return null
+
+  const [isHovered, setIsHovered] = useState(false)
+
+  return (
+    <motion.div
+      drag
+      dragMomentum={false}
+      dragConstraints={{
+        left: videoRect.left - 50,
+        right: videoRect.right + 50,
+        top: videoRect.top - 50,
+        bottom: videoRect.bottom + 50,
+      }}
+      onDragEnd={(_event, info) => {
+        // info.point gives us the absolute position of the pointer at drag end.
+        // We store it as the widget's top-left anchor relative to the viewport.
+        // Offset by half the element size is not needed because framer-motion
+        // drag translates from the element's current position — we just need
+        // the cumulative offset which we compute from the element's bounding rect.
+        const el = document.getElementById(`klai-widget-${instanceId}`)
+        if (el) {
+          const rect = el.getBoundingClientRect()
+          onDragEnd(instanceId, rect.left, rect.top)
+        } else {
+          // Fallback: use pointer position
+          onDragEnd(instanceId, info.point.x, info.point.y)
+        }
+      }}
+      onHoverStart={() => setIsHovered(true)}
+      onHoverEnd={() => setIsHovered(false)}
+      style={{
+        position: 'relative',
+        display: 'inline-block',
+        cursor: 'grab',
+        pointerEvents: 'auto',
+        userSelect: 'none',
+      }}
+      whileDrag={{ cursor: 'grabbing' }}
+    >
+      <div id={`klai-widget-${instanceId}`} style={{ display: 'inline-block' }}>
+        <WidgetComponent data={widget} delay={delay} />
+      </div>
+
+      {/* Close button — top-right corner of the widget */}
+      <AnimatePresence>
+        {(isHovered) && (
+          <motion.button
+            key="close-btn"
+            initial={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.7 }}
+            transition={{ duration: 0.12 }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose(instanceId)
+            }}
+            style={{
+              position: 'absolute',
+              top: -8,
+              right: -8,
+              width: 20,
+              height: 20,
+              borderRadius: '50%',
+              background: 'rgba(30,30,36,0.88)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              color: 'rgba(255,255,255,0.75)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+              padding: 0,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+              backdropFilter: 'blur(4px)',
+              WebkitBackdropFilter: 'blur(4px)',
+              zIndex: 1,
+            }}
+            aria-label="Close widget"
+          >
+            <CloseIcon />
+          </motion.button>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  )
+}
 
 export function Overlay() {
   const [videoRect, setVideoRect] = useState<DOMRect | null>(null)
-  const [state, setState] = useState<OverlayState>({ status: 'idle' })
+
+  // The live list of active widget instances. Accumulates across queries.
+  const [instances, setInstances] = useState<WidgetInstance[]>([])
+
+  // Status indicator — loading / error, separate from widget instances.
+  const [statusState, setStatusState] = useState<StatusState>({ status: 'idle' })
+
   const [voiceState, setVoiceState] = useState<VoiceIndicatorState>('idle')
 
-  // PlacementMap computed by the measure pass.
+  // PlacementMap computed by the measure pass (keyed by instance ID).
   const [placements, setPlacements] = useState<PlacementMap>(new Map())
 
-  // Number of nodes currently revealed during progressive assembly.
-  // Starts at 0 when a new layout arrives; increments by 1 every REVEAL_INTERVAL_MS
-  // until it reaches the total node count.
-  const [revealedCount, setRevealedCount] = useState(0)
+  // Set of instance IDs that have been revealed so far. Newly added instances
+  // are added one-by-one via the reveal timer; existing ones stay visible.
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
 
-  // Ref that holds the active reveal interval so we can cancel it on unmount or
-  // when a new query replaces the current layout.
+  // Queue of instance IDs waiting to be progressively revealed.
+  const revealQueueRef = useRef<string[]>([])
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Refs for the hidden measurement layer — keyed by nodeKey (original slot::type).
-  // The useLayoutEffect measure pass reads ONLY from this map.
-  // Kept separate from any visible-layer refs so visible-layer unmount callbacks
-  // cannot delete a measurement ref and corrupt the measure pass.
+  // Refs for the hidden measurement layer — keyed by instance ID.
   const measureRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  // Refs for measuring each widget container after render.
-  // keyed by nodeKey (original slot::type).
-  const widgetRefs = useRef<Map<string, HTMLDivElement>>(new Map())
-
-  // Fingerprint of the current node set — used to detect when nodes change so
-  // we only re-run the resolve pass when necessary (not on every render).
+  // Fingerprint of the current instance set — used to detect when instances
+  // change so we only re-run the resolve pass when necessary.
   const lastNodeFingerprintRef = useRef<string>('')
 
   // Signature of the last proactive suggestion shown — used to skip duplicate detections.
@@ -546,19 +704,127 @@ export function Overlay() {
     }
   }
 
-  // Helper: reset layout-related state before applying a new layout.
-  function resetLayoutState() {
-    if (revealTimerRef.current !== null) {
-      clearInterval(revealTimerRef.current)
-      revealTimerRef.current = null
-    }
-    clearSuggestionTimer()
-    setRevealedCount(0)
-    setPlacements(new Map())
-    lastNodeFingerprintRef.current = ''
-    measureRefs.current.clear()
-    widgetRefs.current.clear()
-  }
+  // ---------------------------------------------------------------------------
+  // Accumulate new layout nodes into the instances list.
+  //
+  // Rules:
+  //   - For each incoming node, compute its widgetSignature.
+  //   - If an existing instance has the SAME signature, UPDATE its widget data
+  //     in place (keep its manualPos / slot).
+  //   - Otherwise ADD as a new instance.
+  //   - Cap at MAX_INSTANCES: if adding would exceed the cap, evict the oldest
+  //     non-dragged instance (lowest insertionOrder, manualPos === null).
+  //   - Queue newly added instance IDs for progressive reveal.
+  //   - Already-present instances are NOT re-mounted (stable React keys via id).
+  // ---------------------------------------------------------------------------
+  const accumulateLayout = useCallback(
+    (layout: Layout, proactive: boolean) => {
+      setInstances((prev) => {
+        const next = [...prev]
+        const newIds: string[] = []
+
+        for (const node of layout.nodes) {
+          const sig = widgetSignature(node)
+
+          // Check for existing instance with same signature.
+          const existingIdx = next.findIndex((i) => widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex }) === sig)
+
+          if (existingIdx !== -1) {
+            // UPDATE in place — preserve id, slot, manualPos.
+            next[existingIdx] = {
+              ...next[existingIdx],
+              widget: node.widget,
+              zIndex: node.zIndex ?? 10,
+            }
+          } else {
+            // ADD as new instance.
+            // Enforce cap: evict oldest non-dragged instance if needed.
+            if (next.length >= MAX_INSTANCES) {
+              const evictIdx = next.reduce<number>((oldest, inst, idx) => {
+                if (inst.manualPos !== null) return oldest
+                if (oldest === -1) return idx
+                return inst.insertionOrder < next[oldest].insertionOrder ? idx : oldest
+              }, -1)
+
+              if (evictIdx !== -1) {
+                console.log('[klai] Evicting oldest widget to make room:', next[evictIdx].widget.type)
+                next.splice(evictIdx, 1)
+              }
+            }
+
+            const id = nextInstanceId()
+            next.push({
+              id,
+              widget: node.widget,
+              slot: node.slot,
+              zIndex: node.zIndex ?? 10,
+              manualPos: null,
+              proactive,
+              insertionOrder: instanceCounter,
+            })
+            newIds.push(id)
+          }
+        }
+
+        // Queue new IDs for progressive reveal.
+        if (newIds.length > 0) {
+          // Sort new IDs by reveal order before queuing.
+          const newInstances = next.filter((i) => newIds.includes(i.id))
+          const sorted = [...newInstances].sort((a, b) => {
+            const rankDiff = revealRank(a.widget.type) - revealRank(b.widget.type)
+            if (rankDiff !== 0) return rankDiff
+            return a.zIndex - b.zIndex
+          })
+
+          revealQueueRef.current.push(...sorted.map((i) => i.id))
+
+          // Start the reveal timer if not already running.
+          if (revealTimerRef.current === null) {
+            // Reveal first one immediately.
+            const firstId = revealQueueRef.current.shift()
+            if (firstId) {
+              setRevealedIds((r) => new Set([...r, firstId]))
+            }
+
+            if (revealQueueRef.current.length > 0) {
+              const interval = setInterval(() => {
+                const nextId = revealQueueRef.current.shift()
+                if (nextId) {
+                  setRevealedIds((r) => new Set([...r, nextId]))
+                }
+                if (revealQueueRef.current.length === 0) {
+                  clearInterval(interval)
+                  revealTimerRef.current = null
+                }
+              }, REVEAL_INTERVAL_MS)
+              revealTimerRef.current = interval
+            }
+          }
+        }
+
+        return next
+      })
+    },
+    [],
+  )
+
+  // Close a single widget instance by ID.
+  const closeInstance = useCallback((id: string) => {
+    setInstances((prev) => prev.filter((i) => i.id !== id))
+    setRevealedIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    measureRefs.current.delete(id)
+  }, [])
+
+  // Persist drag position for a widget instance.
+  const handleDragEnd = useCallback((id: string, x: number, y: number) => {
+    setInstances((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, manualPos: { x, y } } : i)),
+    )
+  }, [])
 
   // Listen for intent queries dispatched by the content script (manual queries).
   useEffect(() => {
@@ -566,11 +832,11 @@ export function Overlay() {
       const { text, image } = (event as CustomEvent<{ text: string; image?: string }>).detail
       if (!text) return
 
-      // Manual query takes precedence — clear any active proactive suggestion.
+      // Manual query takes precedence — clear any active proactive auto-dismiss.
       lastSuggestionSignatureRef.current = ''
-      resetLayoutState()
+      clearSuggestionTimer()
 
-      setState({ status: 'loading' })
+      setStatusState({ status: 'loading' })
 
       try {
         // Include the current session history so the backend can resolve
@@ -607,31 +873,29 @@ export function Overlay() {
         }
 
         // Append this manual interaction to session history (capped at SESSION_HISTORY_MAX).
-        // Proactive suggestions are intentionally excluded — they're not part of the user's
-        // own conversational thread.
         pushHistory(text, layout)
 
-        setRevealedCount(0)
-        // Manual query — not proactive.
-        setState({ status: 'layout', data: layout, proactive: false })
+        setStatusState({ status: 'idle' })
+        // Accumulate — do NOT clear existing widgets.
+        accumulateLayout(layout, false)
       } catch (err) {
-        setState({
+        setStatusState({
           status: 'error',
           message: err instanceof Error ? err.message : 'Unknown error',
         })
         // Auto-dismiss error after 5 seconds.
-        setTimeout(() => setState({ status: 'idle' }), 5000)
+        setTimeout(() => setStatusState({ status: 'idle' }), 5000)
       }
     }
 
     window.addEventListener('klai:query', handleQuery)
     return () => window.removeEventListener('klai:query', handleQuery)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [accumulateLayout])
 
-  // Ref to the current state so the suggestion handler can read it without stale closure.
-  const stateRef = useRef<OverlayState>({ status: 'idle' })
-  stateRef.current = state
+  // Ref to the current instances so the suggestion handler can read it without stale closure.
+  const instancesRef = useRef<WidgetInstance[]>([])
+  instancesRef.current = instances
 
   // Listen for proactive suggestions from the watch-mode polling loop.
   useEffect(() => {
@@ -644,41 +908,56 @@ export function Overlay() {
       const normalized = normalizeToLayout(parsed.data)
       if (!normalized) return
 
-      // Dedup: skip if the signature matches the currently shown suggestion.
+      // Dedup: skip if the signature matches the last shown suggestion.
       const sig = layoutSignature(normalized)
       if (sig === lastSuggestionSignatureRef.current) return
 
-      // If a manual query layout is currently shown, do not override it.
-      // Only override idle or a previous proactive suggestion.
-      const current = stateRef.current
-      if (current.status === 'layout' && !current.proactive) return
-
-      // Apply the new suggestion — side effects outside setState.
+      // Apply the new suggestion.
       lastSuggestionSignatureRef.current = sig
-      resetLayoutState()
+      clearSuggestionTimer()
 
-      // Auto-dismiss after SUGGESTION_AUTO_DISMISS_MS.
+      // Auto-dismiss proactive widgets after SUGGESTION_AUTO_DISMISS_MS.
+      // Find the IDs that will be added and dismiss them when the timer fires.
+      const incomingSigs = new Set(normalized.nodes.map((n) => widgetSignature(n)))
       suggestionDismissTimerRef.current = setTimeout(() => {
         lastSuggestionSignatureRef.current = ''
-        setState((s) => (s.status === 'layout' && s.proactive ? { status: 'idle' } : s))
+        setInstances((prev) => {
+          // Remove only instances that were proactive AND match the dismissed layout.
+          const toRemove = prev
+            .filter((i) => i.proactive && incomingSigs.has(widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex })))
+            .map((i) => i.id)
+          if (toRemove.length === 0) return prev
+          setRevealedIds((r) => {
+            const next = new Set(r)
+            toRemove.forEach((id) => next.delete(id))
+            return next
+          })
+          toRemove.forEach((id) => measureRefs.current.delete(id))
+          return prev.filter((i) => !toRemove.includes(i.id))
+        })
       }, SUGGESTION_AUTO_DISMISS_MS)
 
-      setState({ status: 'layout', data: normalized, proactive: true })
+      accumulateLayout(normalized, true)
     }
 
     window.addEventListener('klai:suggestion', handleSuggestion)
     return () => window.removeEventListener('klai:suggestion', handleSuggestion)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [accumulateLayout])
 
-  // Clean up auto-dismiss timer on unmount.
+  // Clean up timers on unmount.
   useEffect(() => {
-    return () => clearSuggestionTimer()
+    return () => {
+      clearSuggestionTimer()
+      if (revealTimerRef.current !== null) {
+        clearInterval(revealTimerRef.current)
+        revealTimerRef.current = null
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Listen for voice pipeline state changes dispatched by the content script.
-  // Updates the recording indicator ('idle' | 'listening' | 'transcribing').
   useEffect(() => {
     function handleVoiceState(event: Event) {
       const { state: vs } = (event as CustomEvent<{ state: string }>).detail
@@ -694,128 +973,53 @@ export function Overlay() {
   const effectiveRect = videoRect ?? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
 
   // ---------------------------------------------------------------------------
-  // Phase 1: Slot deduplication (pre-render)
+  // Pre-render: deduplicate slots across all instances.
+  // Dragged instances are fixed. Non-dragged instances are resolved against
+  // each other and against fixed instances as obstacles.
   // ---------------------------------------------------------------------------
-  // Runs synchronously during render, before the DOM is updated. Resolves
-  // same-slot conflicts using priority and slot availability.
-  // Nodes are sorted by zIndex before deduplication so the slot-claiming order
-  // is deterministic; then re-sorted into reveal order for progressive assembly.
-  const deduplicatedNodes: LayoutNode[] =
-    state.status === 'layout'
-      ? deduplicateSlots(
-          [...state.data.nodes].sort((a, b) => (a.zIndex ?? 10) - (b.zIndex ?? 10)),
-          effectiveRect,
-        )
-      : []
+  const deduplicatedInstances = instances.length > 0
+    ? deduplicateSlotsForInstances(instances, effectiveRect)
+    : []
 
-  // Sorted into deliberate reveal order: scoreboard → statpanel/timer → alert.
-  // This is the order nodes are passed to AnimatePresence for progressive reveal.
-  const revealOrderedNodes: LayoutNode[] = sortByRevealOrder(deduplicatedNodes)
-
-  // Build node fingerprint: sorted list of "originalSlot::type" keys.
-  // Based on the full node set (not just revealed nodes) so the measure pass
-  // runs against all nodes immediately when the layout arrives.
-  const nodeFingerprint = deduplicatedNodes.map(nodeKey).sort().join('|')
-
-  // ---------------------------------------------------------------------------
-  // Progressive reveal: start a timer when a new layout arrives that increments
-  // revealedCount by 1 every REVEAL_INTERVAL_MS until all nodes are visible.
-  // The timer is cancelled on layout change (new query) and on unmount.
-  //
-  // Strategy for collision-resolver safety:
-  //   All nodes are rendered in a hidden measurement layer (opacity:0,
-  //   pointerEvents:none) from the moment the layout arrives. The
-  //   useLayoutEffect measure pass therefore has access to ALL widget rects
-  //   immediately — it computes final placements for the complete layout before
-  //   the reveal sequence begins. As each node enters AnimatePresence it already
-  //   knows its resolved slot and lands there directly, with no reshuffling.
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (state.status !== 'layout') return
-
-    const total = revealOrderedNodes.length
-
-    // Reveal the first node immediately (count goes 0 → 1).
-    setRevealedCount(1)
-
-    if (total <= 1) return
-
-    // Reveal subsequent nodes one by one.
-    let count = 1
-    const interval = setInterval(() => {
-      count += 1
-      setRevealedCount(count)
-      if (count >= total) {
-        clearInterval(interval)
-        revealTimerRef.current = null
-      }
-    }, REVEAL_INTERVAL_MS)
-
-    revealTimerRef.current = interval
-
-    return () => {
-      clearInterval(interval)
-      revealTimerRef.current = null
-    }
-  // Re-run when the layout data itself changes (new query result).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state])
-
-  // Clean up reveal timer on unmount.
-  useEffect(() => {
-    return () => {
-      if (revealTimerRef.current !== null) {
-        clearInterval(revealTimerRef.current)
-        revealTimerRef.current = null
-      }
-    }
-  }, [])
+  // Build fingerprint: sorted list of "id::slot" keys.
+  const nodeFingerprint = deduplicatedInstances
+    .map((i) => `${i.id}::${i.slot}`)
+    .sort()
+    .join('|')
 
   // ---------------------------------------------------------------------------
   // Phase 2: Measure → resolve overlaps (post-layout)
   // ---------------------------------------------------------------------------
-  // useLayoutEffect fires after DOM mutations but before paint. We measure all
-  // widget containers from the hidden measurement layer (all nodes rendered),
-  // detect pairwise intersections, and update the PlacementMap.
-  // Guard: only re-run when the node fingerprint changes (not on every render).
-  //
-  // Because ALL nodes are pre-rendered in the hidden layer regardless of
-  // revealedCount, this pass computes final placements for the COMPLETE layout
-  // on the first render after a new layout arrives. Progressive reveal then
-  // reveals each widget into its already-resolved slot — no reshuffling.
-  // ---------------------------------------------------------------------------
   useLayoutEffect(() => {
-    if (deduplicatedNodes.length === 0) return
+    if (deduplicatedInstances.length === 0) return
     if (nodeFingerprint === lastNodeFingerprintRef.current) return
 
     lastNodeFingerprintRef.current = nodeFingerprint
 
     // Collect measured rects from the hidden measurement layer refs.
-    // measureRefs holds the hidden-layer divs (opacity:0, zIndex:-1) which are
-    // rendered for ALL nodes regardless of revealedCount, making them the correct
-    // and complete source for the collision resolver's measure pass.
     const measuredRects = new Map<string, DOMRect>()
-    for (const node of deduplicatedNodes) {
-      const key = nodeKey(node)
-      const el = measureRefs.current.get(key)
+    for (const inst of deduplicatedInstances) {
+      const el = measureRefs.current.get(inst.id)
       if (el) {
-        measuredRects.set(key, el.getBoundingClientRect())
+        measuredRects.set(inst.id, el.getBoundingClientRect())
       }
     }
 
-    // Run overlap resolution with measured dimensions.
-    const resolved = resolveOverlaps(deduplicatedNodes, measuredRects, effectiveRect)
+    const resolved = resolveOverlapsForInstances(deduplicatedInstances, measuredRects, effectiveRect)
     setPlacements(resolved)
   })
-  // Intentionally no deps array: useLayoutEffect runs after every render, but
-  // the fingerprint guard inside ensures the resolution logic runs only when
-  // nodes actually change. This is safe because the guard is pure + synchronous.
+
+  // Whether any proactive widget is currently in the instance list.
+  const hasProactive = instances.some((i) => i.proactive)
+
+  // "Clear all" control — only shown when 2+ widgets are present.
+  const showClearAll = instances.length >= 2
 
   return (
     <div style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'relative' }}>
       {/* Loading indicator — anchored top-left of the video */}
       <AnimatePresence>
-        {state.status === 'loading' && (
+        {statusState.status === 'loading' && (
           <motion.div
             key="klai-loading"
             initial={{ opacity: 0, y: -8 }}
@@ -842,7 +1046,7 @@ export function Overlay() {
 
       {/* Error message — anchored top-left of the video */}
       <AnimatePresence>
-        {state.status === 'error' && (
+        {statusState.status === 'error' && (
           <motion.div
             key="klai-error"
             initial={{ opacity: 0, y: -8 }}
@@ -863,16 +1067,12 @@ export function Overlay() {
               pointerEvents: 'none',
             }}
           >
-            {state.message}
+            {statusState.message}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Voice capture indicator — anchored top-center of the video.
-          'listening': pulsing red dot + mic icon + "Listening..."
-          'transcribing': spinner dot + "Transcribing..."
-          'idle': nothing rendered (exits via AnimatePresence)
-      */}
+      {/* Voice capture indicator — anchored top-center of the video. */}
       <AnimatePresence>
         {voiceState !== 'idle' && (
           <motion.div
@@ -960,86 +1160,9 @@ export function Overlay() {
         )}
       </AnimatePresence>
 
-      {/*
-        Hidden measurement layer — ALL nodes from the current layout rendered at
-        opacity:0, pointerEvents:none, visually identical positions to their
-        final resolved slots. This ensures the useLayoutEffect measure pass
-        can collect real DOM rects for every widget immediately when the layout
-        arrives, BEFORE the progressive reveal sequence begins. The collision
-        resolver therefore computes final placements for the complete layout
-        upfront; each widget that AnimatePresence reveals subsequently lands
-        directly in its already-resolved slot without any reshuffling.
-
-        These divs are aria-hidden and never interactive.
-      */}
-      {deduplicatedNodes.map((node) => {
-        const WidgetComponent = getWidget(node.widget.type)
-        if (!WidgetComponent) return null
-
-        const key = nodeKey(node)
-        const placement = placements.get(key)
-        const resolvedSlot = (placement?.slot ?? node.slot) as Slot
-        const offsetY = placement?.offsetY ?? 0
-        const style = slotStyle(resolvedSlot, effectiveRect, offsetY)
-
-        return (
-          <div
-            key={`measure::${key}`}
-            ref={(el) => {
-              // Write into the dedicated measurement ref map only.
-              // The visible layer uses widgetRefs and must never touch this map.
-              if (el) measureRefs.current.set(key, el)
-              else measureRefs.current.delete(key)
-            }}
-            aria-hidden="true"
-            style={{ ...style, opacity: 0, pointerEvents: 'none', zIndex: -1 }}
-          >
-            <WidgetComponent data={node.widget} />
-          </div>
-        )
-      })}
-
-      {/*
-        Slot-based layout renderer — single AnimatePresence wrapping revealed nodes.
-
-        Mode: popLayout
-          When a widget exits (query replacement or dismissal), popLayout pops it
-          out of normal flow immediately so the remaining widgets can reflow into
-          their positions without waiting for the exit animation to complete. This
-          avoids the "ghost gap" problem you get with mode="sync" on multi-widget
-          layouts. mode="wait" would block ALL entrances until ALL exits finish,
-          creating a noticeable flash of empty screen between layouts.
-
-        Keys: derived from ORIGINAL slot + widget.type via nodeKey().
-          Stable across re-renders AND across collision relocation — a scoreboard
-          originally assigned top-center keeps key "top-center::scoreboard" even
-          if it gets relocated to top-left by the resolver. This ensures relocation
-          is a CSS-only update: the component stays mounted, position changes
-          smoothly without re-mounting the Framer Motion tree.
-
-        Progressive reveal:
-          revealOrderedNodes is sorted scoreboard → statpanel/timer → alert.
-          Only the first revealedCount nodes are passed to AnimatePresence children;
-          each mounts with delay=0 since the REVEAL_INTERVAL_MS timer is the stagger.
-          No double-stagger: the timer replaces the old index*STAGGER_DELAY approach.
-
-        Collision resolver:
-          Phase 1 (deduplicateSlots): same-slot conflicts resolved by priority
-          (alert > scoreboard > timer > statpanel). Lower-priority widget is
-          relocated to the nearest free slot before first render.
-
-          Phase 2 (useLayoutEffect measure pass): runs against the hidden
-          measurement layer (all nodes). Computes the complete PlacementMap
-          before reveal begins; revealed widgets land in their final slots directly.
-
-        Center no-go zone:
-          The central 40% of the video rect (both width and height) is excluded
-          from all slot candidates during relocation. Widgets that land in the
-          center zone due to the model's original assignment are relocated first.
-      */}
-      {/* Proactive "Auto" chip — shown when a suggestion is active */}
+      {/* Proactive "Auto" chip — shown when any proactive widget is active */}
       <AnimatePresence>
-        {state.status === 'layout' && state.proactive && (
+        {hasProactive && (
           <motion.div
             key="klai-auto-chip"
             initial={{ opacity: 0, scale: 0.85 }}
@@ -1048,7 +1171,6 @@ export function Overlay() {
             transition={{ duration: 0.2 }}
             style={{
               position: 'fixed',
-              // Place at bottom-right of the video, just above the bottom edge.
               bottom: window.innerHeight - effectiveRect.bottom + SLOT_PADDING + 4,
               right: window.innerWidth - effectiveRect.right + SLOT_PADDING,
               background: 'rgba(250, 204, 21, 0.15)',
@@ -1083,36 +1205,160 @@ export function Overlay() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence mode="popLayout">
-        {revealOrderedNodes.slice(0, revealedCount).map((node) => {
-          const WidgetComponent = getWidget(node.widget.type)
-
-          // Skip nodes whose widget type is not in the registry (graceful per-node fallback).
-          if (!WidgetComponent) {
-            console.warn('[klai] Unknown widget type in layout node:', node.widget.type)
-            return null
-          }
-
-          const key = nodeKey(node)
-
-          // Look up resolved placement from the measure pass.
-          // Falls back to the node's (deduplicated) slot with no offset on first render.
-          const placement = placements.get(key)
-          const resolvedSlot = (placement?.slot ?? node.slot) as Slot
-          const offsetY = placement?.offsetY ?? 0
-
-          const style = slotStyle(resolvedSlot, effectiveRect, offsetY)
-
-          return (
-            <div
-              key={key}
-              style={{ ...style, zIndex: node.zIndex ?? 10 }}
+      {/* "Clear all" button — shown when 2+ widgets are present */}
+      <AnimatePresence>
+        {showClearAll && (
+          <motion.button
+            key="klai-clear-all"
+            initial={{ opacity: 0, scale: 0.85 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.85 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              setInstances([])
+              setRevealedIds(new Set())
+              measureRefs.current.clear()
+              lastNodeFingerprintRef.current = ''
+              setPlacements(new Map())
+            }}
+            style={{
+              position: 'fixed',
+              bottom: window.innerHeight - effectiveRect.bottom + SLOT_PADDING + 4,
+              right: window.innerWidth - effectiveRect.right + SLOT_PADDING + (hasProactive ? 60 : 0),
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              backdropFilter: 'blur(6px)',
+              WebkitBackdropFilter: 'blur(6px)',
+              color: 'rgba(255,255,255,0.6)',
+              fontSize: 11,
+              fontWeight: 500,
+              padding: '3px 9px',
+              borderRadius: 999,
+              fontFamily: 'monospace',
+              letterSpacing: '0.02em',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+              zIndex: 2147483646,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+            aria-label="Clear all widgets"
+          >
+            <svg
+              width="9"
+              height="9"
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
             >
-              {/* delay=0: the REVEAL_INTERVAL_MS timer is the stagger; no double-delay. */}
-              <WidgetComponent data={node.widget} delay={0} />
-            </div>
-          )
-        })}
+              <line x1="1" y1="1" x2="9" y2="9" />
+              <line x1="9" y1="1" x2="1" y2="9" />
+            </svg>
+            Clear all
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      {/*
+        Hidden measurement layer — ALL instances rendered at opacity:0,
+        pointerEvents:none so the useLayoutEffect measure pass can collect
+        real DOM rects for every widget immediately.
+        Instances with manualPos are rendered at their manual position for
+        accurate obstacle rect computation.
+      */}
+      {deduplicatedInstances.map((inst) => {
+        const WidgetComponent = getWidget(inst.widget.type)
+        if (!WidgetComponent) return null
+
+        const placement = placements.get(inst.id)
+        const resolvedSlot = (placement?.slot ?? inst.slot) as Slot
+        const offsetY = placement?.offsetY ?? 0
+
+        // For dragged widgets, we only need a rough size estimate for obstacle computation.
+        // Use the slot style for non-dragged, and a fixed position for dragged.
+        const style: React.CSSProperties = inst.manualPos
+          ? { position: 'fixed', top: inst.manualPos.y, left: inst.manualPos.x }
+          : slotStyle(resolvedSlot, effectiveRect, offsetY)
+
+        return (
+          <div
+            key={`measure::${inst.id}`}
+            ref={(el) => {
+              if (el) measureRefs.current.set(inst.id, el)
+              else measureRefs.current.delete(inst.id)
+            }}
+            aria-hidden="true"
+            style={{ ...style, opacity: 0, pointerEvents: 'none', zIndex: -1 }}
+          >
+            <WidgetComponent data={inst.widget} />
+          </div>
+        )
+      })}
+
+      {/*
+        Main widget renderer — AnimatePresence with popLayout for smooth exits.
+        Each instance uses its stable ID as the React key so existing widgets
+        are NOT re-mounted when new ones arrive (stable keys = stable motion trees).
+
+        Progressive reveal:
+          Only instances whose ID is in revealedIds are rendered.
+          New instances are added to revealedIds one at a time via the reveal timer.
+          Existing instances remain in revealedIds — they do NOT re-animate.
+
+        Dragged widgets:
+          When manualPos is set, the widget is rendered at that absolute position
+          using position:fixed + top/left instead of the slot style. The framer-motion
+          drag does NOT accumulate further (the widget's drag offset is reset to 0
+          on each mount), so we render it directly at the final stored position.
+
+        Pointer-events:
+          The overlay root is pointerEvents:none (click-through for video).
+          Each DraggableWidget sets pointerEvents:auto on its container so
+          drag and click events are captured only where a widget exists.
+      */}
+      <AnimatePresence mode="popLayout">
+        {deduplicatedInstances
+          .filter((inst) => revealedIds.has(inst.id))
+          .map((inst) => {
+            const placement = placements.get(inst.id)
+            const resolvedSlot = (placement?.slot ?? inst.slot) as Slot
+            const offsetY = placement?.offsetY ?? 0
+
+            // When the user has dragged the widget, render it at the stored
+            // absolute position (not slot-based). The drag handle itself starts
+            // with x=0,y=0 framer-motion transform — the visual position comes
+            // from top/left CSS.
+            const containerStyle: React.CSSProperties = inst.manualPos
+              ? {
+                  position: 'fixed',
+                  top: inst.manualPos.y,
+                  left: inst.manualPos.x,
+                  zIndex: inst.zIndex ?? 10,
+                  pointerEvents: 'none',
+                }
+              : {
+                  ...slotStyle(resolvedSlot, effectiveRect, offsetY),
+                  zIndex: inst.zIndex ?? 10,
+                  pointerEvents: 'none',
+                }
+
+            return (
+              <div key={inst.id} style={containerStyle}>
+                <DraggableWidget
+                  instanceId={inst.id}
+                  widget={inst.widget}
+                  delay={0}
+                  videoRect={effectiveRect}
+                  onClose={closeInstance}
+                  onDragEnd={handleDragEnd}
+                />
+              </div>
+            )
+          })}
       </AnimatePresence>
     </div>
   )
