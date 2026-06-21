@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
-import klaiMascot from '../assets/klai-mascot.png'
+// Mascot image lives in public/ and is loaded via chrome.runtime.getURL so it
+// resolves to a chrome-extension:// URL inside the host page (a bundled import
+// would resolve relative to the host page and 404).
+const klaiMascot = chrome.runtime.getURL('klai-mascot.png')
 import {
   ResponseSchema,
   ControlActionSchema,

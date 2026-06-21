@@ -37,5 +37,11 @@
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "matches": ["<all_urls>"],
+      "resources": ["klai-mascot.png"]
+    }
+  ]
 }
