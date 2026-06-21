@@ -126,17 +126,16 @@ async function setVoiceState(state: VoiceState): Promise<void> {
 }
 
 // Ensure the offscreen recorder document exists (idempotent).
-// USER_MEDIA   — required for microphone access (recording path).
-// AUDIO_PLAYBACK — required to play audio without a prior user gesture
-//                  (narration path: proactive events have no gesture).
+// USER_MEDIA — required for microphone access (recording path only).
+// Narration now runs directly in the content script via speak() — no
+// AUDIO_PLAYBACK reason needed here.
 async function ensureOffscreen(): Promise<void> {
   const has = await chrome.offscreen.hasDocument?.()
   if (has) return
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_PATH,
-    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
-    justification:
-      'Record the microphone for voice commands and play TTS narration audio without a user-gesture requirement.',
+    reasons: [chrome.offscreen.Reason.USER_MEDIA],
+    justification: 'Record the microphone for voice commands.',
   })
 }
 
@@ -166,35 +165,11 @@ chrome.commands.onCommand.addListener((command) => {
   void startVoiceCapture()
 })
 
-// Voice messages from the popup button, offscreen recorder, and content scripts.
+// Voice messages from the popup button and offscreen recorder.
+// Narration (KLAI_NARRATE / KLAI_NARRATE_FALLBACK) is removed — narration now
+// runs directly in the content script via speak() and never passes through the SW.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === 'KLAI_NARRATE' && typeof msg.text === 'string') {
-    // Content script wants to narrate text. Route through the offscreen doc so
-    // AUDIO_PLAYBACK lets it play without a user-gesture requirement (proactive events).
-    void (async () => {
-      try {
-        await ensureOffscreen()
-        await chrome.runtime.sendMessage({
-          target: 'offscreen',
-          type: 'KLAI_SPEAK',
-          text: msg.text,
-          backendUrl: BACKEND_BASE_URL,
-        })
-      } catch (err) {
-        // Offscreen doc not ready or message failed — send fallback so the content
-        // script can attempt SpeechSynthesis directly.
-        console.warn('[Klai SW] KLAI_NARRATE relay failed:', err)
-        try {
-          const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
-          if (tab?.id != null) {
-            await chrome.tabs.sendMessage(tab.id, { type: 'KLAI_NARRATE_FALLBACK', text: msg.text })
-          }
-        } catch {
-          // Protected page or no tab — ignore.
-        }
-      }
-    })()
-  } else if (msg?.type === 'POPUP_START_RECORDING') {
+  if (msg?.type === 'POPUP_START_RECORDING') {
     void startVoiceCapture()
   } else if (msg?.type === 'KLAI_RECORDING_STARTED') {
     // Offscreen recorder confirmed that MediaRecorder.start() succeeded.
@@ -207,19 +182,6 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (typeof msg.error === 'string' && /permission|notallowed|denied|dismiss/i.test(msg.error)) {
       openPermissionPage()
     }
-  } else if (msg?.type === 'KLAI_NARRATE_FALLBACK' && typeof msg.text === 'string') {
-    // Offscreen doc could not play audio — relay fallback to the active content script
-    // so it can try SpeechSynthesis directly.
-    void (async () => {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
-        if (tab?.id != null) {
-          await chrome.tabs.sendMessage(tab.id, { type: 'KLAI_NARRATE_FALLBACK', text: msg.text })
-        }
-      } catch {
-        // Protected page or no tab — ignore.
-      }
-    })()
   }
 })
 

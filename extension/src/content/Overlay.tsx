@@ -3,33 +3,18 @@ import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
 import { speak, unlockAudio } from '../lib/speak'
 
 // ---------------------------------------------------------------------------
-// Narration routing — content → SW → offscreen (primary, gesture-free path)
+// Narration — direct speak() path (single-hop, content script only)
 // ---------------------------------------------------------------------------
 //
-// Chrome blocks HTMLAudioElement.play() in content scripts for proactive
-// (watch-mode) events that have no preceding user gesture. Routing narration
-// through the offscreen document (created with AUDIO_PLAYBACK reason) sidesteps
-// this restriction — the offscreen doc can play audio at any time.
-//
-// Flow:
-//   narrate(text)
-//     → chrome.runtime.sendMessage({ type: 'KLAI_NARRATE', text })
-//       → SW: ensureOffscreen() + sendMessage({ target:'offscreen', type:'KLAI_SPEAK' })
-//         → offscreen.js: fetch /api/tts → Audio.play() [no gesture needed]
-//         → on failure: send({ type:'KLAI_NARRATE_FALLBACK', text })
-//           → SW: chrome.tabs.sendMessage(tab.id, { type:'KLAI_NARRATE_FALLBACK' })
-//             → content script listener below: speak(text) [SpeechSynthesis fallback]
-//
-// The direct speak() import is kept ONLY for the KLAI_NARRATE_FALLBACK path.
-// Never call speak() directly for narration — that would bypass the offscreen doc
-// and silently fail on proactive events.
+// Narration runs entirely in the content script via speak() from ../lib/speak.
+// speak() tries ElevenLabs (/api/tts) first, falls back to SpeechSynthesis.
+// SpeechSynthesis works reliably in the content script after the user's first
+// gesture (the mascot click or any page interaction unlocks it via unlockAudio).
+// The old SW+offscreen hop is removed — it was a silent failure point.
 
 function narrate(text: string): void {
   if (!text.trim()) return
-  chrome.runtime.sendMessage({ type: 'KLAI_NARRATE', text }).catch(() => {
-    // SW not available (e.g. during hot-reload in dev) — fall back inline.
-    void speak(text)
-  })
+  void speak(text)
 }
 // Mascot image lives in public/ and is loaded via chrome.runtime.getURL so it
 // resolves to a chrome-extension:// URL inside the host page (a bundled import
@@ -1987,22 +1972,6 @@ export function Overlay() {
 
     window.addEventListener('klai:narration', handleNarration)
     return () => window.removeEventListener('klai:narration', handleNarration)
-  }, [])
-
-  // Listen for KLAI_NARRATE_FALLBACK from the service worker.
-  // Fired when the offscreen doc's ElevenLabs fetch fails — use SpeechSynthesis
-  // as a last-resort fallback so the user still hears narration.
-  useEffect(() => {
-    function handleNarrateFallback(
-      msg: { type: string; text?: string },
-      _sender: chrome.runtime.MessageSender,
-    ) {
-      if (msg?.type === 'KLAI_NARRATE_FALLBACK' && typeof msg.text === 'string') {
-        void speak(msg.text)
-      }
-    }
-    chrome.runtime.onMessage.addListener(handleNarrateFallback)
-    return () => chrome.runtime.onMessage.removeListener(handleNarrateFallback)
   }, [])
 
   // Unlock the shared audio element on the user's first gesture so that

@@ -67,9 +67,15 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
 //   - On 'ended' the URL is revoked.
 //   - When a new clip replaces an in-progress one (stopCurrent), the old URL
 //     is revoked immediately so memory is not leaked.
+//
+// Latest-wins abort:
+//   - currentFetchController holds the AbortController for the in-flight
+//     /api/tts fetch. Every new speak() call aborts the previous controller
+//     so stale fetches never play after a newer request has started.
 
 const audioEl: HTMLAudioElement = new Audio()
 let currentObjectUrl: string | null = null
+let currentFetchController: AbortController | null = null
 
 // Whether unlockAudio() has already run a successful priming play.
 // Once true, re-entering unlockAudio() is a no-op.
@@ -133,10 +139,16 @@ export function unlockAudio(): void {
 }
 
 /**
- * Stop any currently-playing audio (ElevenLabs or SpeechSynthesis).
- * Called at the start of every speak() so new speech always interrupts.
+ * Stop any currently-playing audio (ElevenLabs or SpeechSynthesis) and
+ * abort any in-flight /api/tts fetch. Called at the start of every speak()
+ * so new speech always interrupts — no backlog, no stale clips.
  */
 function stopCurrent(): void {
+  // Abort in-flight fetch first so it cannot play after this point.
+  if (currentFetchController !== null) {
+    currentFetchController.abort()
+    currentFetchController = null
+  }
   audioEl.pause()
   if (currentObjectUrl !== null) {
     URL.revokeObjectURL(currentObjectUrl)
@@ -150,6 +162,11 @@ function stopCurrent(): void {
 /**
  * Speak `text` via browser SpeechSynthesis (fallback path).
  * Spanish voice preferred; rate 1.05.
+ *
+ * Robustness: if getVoices() returns an empty list (voices have not loaded yet
+ * or are not available), we still speak with the system default voice rather
+ * than silently doing nothing. The utterance.voice is only set when a Spanish
+ * voice is actually available — otherwise the browser picks its default.
  */
 function speakFallback(text: string): void {
   if (!('speechSynthesis' in window)) return
@@ -159,8 +176,11 @@ function speakFallback(text: string): void {
 
   const utterance = new SpeechSynthesisUtterance(text)
 
+  // pickSpanishVoice() returns null when getVoices() is empty (async load) or
+  // when no Spanish voice is installed. Do NOT block on voice availability —
+  // omitting utterance.voice lets the browser use its default voice immediately.
   const voice = pickSpanishVoice()
-  if (voice) utterance.voice = voice
+  if (voice !== null) utterance.voice = voice
 
   utterance.rate = 1.05
   utterance.volume = 1
@@ -189,15 +209,21 @@ function speakFallback(text: string): void {
 export async function speak(text: string): Promise<void> {
   if (!text.trim()) return
 
-  // Stop any in-flight utterance or audio element — no backlog.
+  // Stop any in-flight fetch and any playing audio — latest-wins, no backlog.
   stopCurrent()
 
   // --- Attempt ElevenLabs TTS ---
   try {
+    // Fresh AbortController for this request. Stored at module level so the
+    // NEXT call to stopCurrent() (triggered by the next speak()) can abort it.
+    const controller = new AbortController()
+    currentFetchController = controller
+
     const response = await fetch(`${BACKEND_BASE_URL}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     })
 
     if (!response.ok) {
@@ -208,6 +234,12 @@ export async function speak(text: string): Promise<void> {
     }
 
     const blob = await response.blob()
+
+    // Guard: if this request was superseded while we were awaiting the blob, bail.
+    if (controller.signal.aborted) return
+
+    // Fetch is done; controller is no longer needed.
+    currentFetchController = null
 
     // Revoke any previous object URL before assigning the new one.
     if (currentObjectUrl !== null) {
@@ -240,12 +272,17 @@ export async function speak(text: string): Promise<void> {
     // Fall back to SpeechSynthesis in that case.
     await audioEl.play()
   } catch (err) {
+    // AbortError = a newer speak() cancelled this one intentionally.
+    // Discard silently — do not fall back (the newer call handles playback).
+    if (err instanceof Error && err.name === 'AbortError') return
+
     // Network error, play() rejection (autoplay policy if never unlocked), or
     // any other failure. Clean up and fall back to SpeechSynthesis.
     if (currentObjectUrl !== null) {
       URL.revokeObjectURL(currentObjectUrl)
       currentObjectUrl = null
     }
+    currentFetchController = null
     console.warn('[klai] ElevenLabs TTS failed, falling back to SpeechSynthesis:', err)
     speakFallback(text)
   }
