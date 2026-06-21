@@ -274,6 +274,7 @@ Call render_layout with the best matching layout.`
   // System guidance for the agent loop: research with web_research when the answer
   // isn't on screen, then finish with render_layout.
   const GENERATE_SYSTEM = `You are Klai, a generative overlay assistant for live video.
+NEVER use emojis, emoticons, or pictographic characters in any output field — message, title, body, labels, point text, team names, or any other string. Plain text only. For substitutions write "Entra: [player]. Sale: [player]." with no arrow symbols or emojis of any kind.
 You have four tools:
 - get_sports_data: PRIMARY source for the live FIFA World Cup match shown on screen. Use it FIRST for any football/soccer question. It covers score, stats, goals/cards, referee/venue/TV, match leaders, lineups/formations, group standings, tournament record, recent form/head-to-head, betting odds, and news. Pass the two team names you read from the on-screen scorebug in \`teams\` (order/abbreviations don't matter; if you can't read them, call it with no teams to resolve the only live game). Pass \`want\` as an array of the section(s) the user asked for — e.g. ["score"], ["stats"], ["info"] for referee/venue, ["lineups"], ["standings"], ["form"], ["odds"], ["news"], or ["score","info"] for combined; request ONLY what's needed, omit \`want\` for a quick overview. Map results into scoreboard/statpanel/alert/infocard/keypoints widgets, and TRUST its score/stats over what you read from the image.
 - web_research: fallback for facts get_sports_data can't provide — non-World-Cup sports, player bios, current news, definitions, prices, general knowledge. Prefer one focused query.
@@ -974,14 +975,33 @@ SCOREBUG VISIBILITY:
 
 Is something NOTABLE happening in the PRIMARY content RIGHT NOW that would be worth surfacing as an overlay?
 
-Examples of notable moments (across different content types):
-- Sport: goal just scored, red or yellow card shown, penalty awarded, VAR decision, significant score change
+NOTABLE MOMENTS — apply DIFFERENT thresholds by event tier:
+
+TIER 1 — HIGHEST PRIORITY (always notable, call check_notable with notable: true):
+- Sport: goal scored, red or yellow card shown, penalty awarded, VAR decision, own goal, significant score change
+
+TIER 2 — ACTION PLAYS (notable when the play is clearly visible and active — be less conservative here):
+- Sport: corner kick being taken or just awarded, a clear ball steal/recovery that creates a counter-attack chance,
+  a shot on goal or header towards goal, a goalkeeper save (including reflex saves), a dangerous free kick near the
+  area, a hard foul that stops play, a near-miss or big chance on goal, a fast counter-attack developing
+
+TIER 3 — SKIP (not notable, answer notable: false):
+- Routine possession, midfield passing, standard throw-ins, routine goalkeeper distribution
+- Generic player substitutions with nothing else happening
+- Normal set-piece preparation with no action yet
+- Any moment you cannot confidently identify as belonging to Tier 1 or Tier 2
+
+For Tier 2 events: if the play is actively unfolding in the frame and clearly identifiable, answer notable: true.
+Do NOT require Tier 1 certainty for Tier 2 events — these are exactly the action moments worth surfacing.
+When genuinely unsure, default to notable: false (do not surface mundane moments).
+
+Non-sport content:
 - Lecture/talk: a key definition shown, a pivotal slide, a graph or result being explained
 - Cooking: a critical step being performed, a technique being demonstrated
 - Gameplay: a boss fight started, a key item obtained, a notable game event
 - Any: a dramatic, educational, or clearly significant moment in the main video
 
-Call check_notable with your assessment. Be conservative: if you are unsure, answer notable: false.`
+Call check_notable with your assessment.`
 
   const stage1Response = await client.messages.create({
     model: 'claude-haiku-4-5', // Stage 1: fast cheap filter
@@ -1090,20 +1110,41 @@ ${DETECT_GROUNDING_RULES}
 
 ONLY call render_layout if there is a CONFIRMED NOTABLE moment in the PRIMARY content.
 
-For sport broadcasts, notable moments include:
-- A goal just scored, a card shown, a penalty awarded, a significant score change, a VAR decision
+NO EMOJIS: NEVER use emojis, emoticons, or pictographic characters in any field — message, title, body,
+labels, point text, team names, or any other string. Plain text only. For substitutions, write
+"Entra: [player]. Sale: [player]." with NO arrow symbols or emojis of any kind.
+
+For sport broadcasts, notable moments include — TWO TIERS:
+
+TIER 1 — always confirm (highest priority):
+  A goal scored, a red or yellow card shown, a penalty awarded, a VAR decision, an own goal,
+  a significant score change.
+
+TIER 2 — confirm when the play is clearly visible in the frame:
+  A corner kick awarded or being taken, a clear ball steal/recovery leading to a chance,
+  a shot on goal or header directed at goal, a goalkeeper save, a dangerous free kick near the area,
+  a hard foul stopping play, a near-miss or big chance on goal, a fast counter-attack developing.
 
 IMPORTANT — Sport play-by-play narration: when you confirm a notable sport moment, you MUST include
-an alert widget whose message is a short Spanish play description (10 words or fewer). Examples:
+an alert widget whose message is a concise Spanish play description (12 words or fewer). Examples:
   - Goal: "Gol de {team}, minuto {min}" (e.g. "Gol de Argentina, minuto 34")
-  - Yellow card: "Tarjeta amarilla para {team}" (e.g. "Tarjeta amarilla para Francia")
+  - Yellow card: "Tarjeta amarilla para {team}"
   - Red card: "Tarjeta roja para {team}"
   - Penalty: "Penal para {team}" (e.g. "Penal para Brasil")
-  - VAR decision: "Revisión VAR — {brief outcome}"
+  - VAR decision: "Revision VAR - {brief outcome}"
   - Own goal: "Autogol de {team}"
-  - Significant score change / general notable: "{team} {score} - {team} {score}, minuto {min}"
+  - Corner kick: "Tiro de esquina para {team}"
+  - Ball steal / recovery: "Robo de balon de {team}"
+  - Shot on goal: "Tiro al arco de {team}"
+  - Goalkeeper save: "Atajada del portero de {team}"
+  - Dangerous free kick: "Tiro libre peligroso para {team}"
+  - Hard foul: "Falta peligrosa de {team}"
+  - Near-miss / big chance: "Gran oportunidad de {team}"
+  - Counter-attack: "Contrataque de {team}"
+  - Substitution: "Entra: {player}. Sale: {player}." (plain text only, no arrows or symbols)
+  - Significant score change: "{team} {score} - {team} {score}, minuto {min}"
 Keep the alert message concise. This message will be read aloud to the viewer for play-by-play commentary.
-Always set tone: "success" for goals/team advantages, "warning" for cards/penalties, "info" for VAR/other events.
+Use tone: "success" for goals and team advantages, "warning" for cards/penalties/fouls, "info" for corners/shots/saves/VAR/other events.
 You may add additional widgets (scoreboard, statpanel) alongside the alert, but the alert is REQUIRED for
 any confirmed sport notable moment so the narration engine can read it.
 

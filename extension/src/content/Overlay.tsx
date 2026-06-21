@@ -152,29 +152,116 @@ function deriveWidgetLabel(inst: WidgetInstance): string {
 }
 
 // ---------------------------------------------------------------------------
+// Emoji safety net — strip emoji/pictographic characters from any string
+// before it reaches the screen or the voice engine. The pattern uses
+// explicit \uXXXX hex escapes only — no literal Unicode in source — so it
+// is safe across all editors and file-transfer tools.
+//
+// Ranges removed (Unicode code points):
+//   U+2190-U+21FF  Arrows block
+//   U+2300-U+23FF  Miscellaneous Technical (phone, clock symbols)
+//   U+25A0-U+27BF  Geometric Shapes + Dingbats
+//   U+2B00-U+2BFF  Miscellaneous Symbols and Arrows
+//   U+FE0F         Variation Selector-16 (emoji presentation modifier)
+//   U+200D         Zero Width Joiner (compound emoji sequences)
+//   U+1F000-U+1FFFF Main emoji block (via surrogate pairs in JS):
+//     \uD83C[\uDF00-\uDFFF], \uD83D[\uDC00-\uDE4F], \uD83E[\uDD00-\uDDFF]
+//
+// Preserved: a-z A-Z 0-9, accented Latin (Spanish: a e i o u with accents,
+//   n with tilde, inverted ! and ?), standard ASCII punctuation, spaces.
+// ---------------------------------------------------------------------------
+const EMOJI_REGEX =
+  /[\u2190-\u21FF\u2300-\u23FF\u25A0-\u27BF\u2B00-\u2BFF\uFE0F\u200D]|\uD83C[\uDF00-\uDFFF]|\uD83D[\uDC00-\uDE4F]|\uD83E[\uDD00-\uDDFF]/g
+
+/**
+ * Remove emoji and pictographic characters from `text`.
+ * Preserves all accented Spanish characters (a e i o u with accents, n with
+ * tilde, inverted punctuation). Safe to call on any user-visible string.
+ */
+function stripEmojis(text: string): string {
+  return text.replace(EMOJI_REGEX, '').replace(/\s{2,}/g, ' ').trim()
+}
+
+/**
+ * Return a sanitized copy of a WidgetNode with emojis removed from every
+ * user-visible text field. Non-text fields (numbers, enums) are unchanged.
+ * Called at the render boundary so no emoji ever reaches the DOM or narration.
+ */
+function sanitizeWidget(widget: WidgetNode): WidgetNode {
+  switch (widget.type) {
+    case 'scoreboard':
+      return {
+        ...widget,
+        teams: widget.teams.map((t) => ({ ...t, name: stripEmojis(t.name) })) as typeof widget.teams,
+      }
+    case 'momentum':
+      return {
+        ...widget,
+        teams: widget.teams.map((t) => ({ ...t, name: stripEmojis(t.name) })) as typeof widget.teams,
+        ...(widget.note !== undefined ? { note: stripEmojis(widget.note) } : {}),
+      }
+    case 'statpanel':
+      return {
+        ...widget,
+        ...(widget.title !== undefined ? { title: stripEmojis(widget.title) } : {}),
+        stats: widget.stats.map((s) => ({
+          label: stripEmojis(s.label),
+          value: stripEmojis(s.value),
+        })),
+      }
+    case 'alert':
+      return { ...widget, message: stripEmojis(widget.message) }
+    case 'infocard':
+      return {
+        ...widget,
+        title: stripEmojis(widget.title),
+        body: stripEmojis(widget.body),
+      }
+    case 'keypoints':
+      return {
+        ...widget,
+        ...(widget.title !== undefined ? { title: stripEmojis(widget.title) } : {}),
+        points: widget.points.map(stripEmojis),
+      }
+    case 'definition':
+      return {
+        ...widget,
+        term: stripEmojis(widget.term),
+        definition: stripEmojis(widget.definition),
+      }
+    default:
+      return widget
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Narration helpers — build natural Spanish spoken phrases from widget data.
 // ---------------------------------------------------------------------------
 
 /**
  * Build a short spoken phrase (Spanish) for a single widget.
  * Returns an empty string for widget types with no meaningful narration.
+ * Strips emojis from all text fields before composing the phrase so the
+ * voice engine never receives pictographic characters.
  */
 function buildSpokenPhrase(widget: WidgetNode): string {
   switch (widget.type) {
     case 'scoreboard': {
       const [h, a] = widget.teams
-      const base = `${h.name} ${h.score}, ${a.name} ${a.score}`
+      const hn = stripEmojis(h.name)
+      const an = stripEmojis(a.name)
+      const base = `${hn} ${h.score}, ${an} ${a.score}`
       return widget.minute !== undefined ? `${base}, minuto ${widget.minute}` : base
     }
     case 'momentum': {
       const [h] = widget.teams
-      return `${h.name}, ${h.probability} por ciento de probabilidad de ganar`
+      return `${stripEmojis(h.name)}, ${h.probability} por ciento de probabilidad de ganar`
     }
     case 'statpanel': {
-      const titlePart = widget.title ? `${widget.title}. ` : ''
+      const titlePart = widget.title ? `${stripEmojis(widget.title)}. ` : ''
       const statsPart = widget.stats
         .slice(0, 3)
-        .map((s) => `${s.label}: ${s.value}`)
+        .map((s) => `${stripEmojis(s.label)}: ${stripEmojis(s.value)}`)
         .join(', ')
       return `${titlePart}${statsPart}`
     }
@@ -187,21 +274,21 @@ function buildSpokenPhrase(widget: WidgetNode): string {
       return `Temporizador de ${secs} segundos`
     }
     case 'alert':
-      return widget.message
+      return stripEmojis(widget.message)
     case 'infocard': {
-      const body = widget.body.length > 140 ? `${widget.body.slice(0, 137)}...` : widget.body
-      return `${widget.title}. ${body}`
+      const rawBody = widget.body.length > 140 ? `${widget.body.slice(0, 137)}...` : widget.body
+      return `${stripEmojis(widget.title)}. ${stripEmojis(rawBody)}`
     }
     case 'keypoints': {
-      const titlePart = widget.title ? `${widget.title}. ` : ''
-      const pointsPart = widget.points.slice(0, 3).join(', ')
+      const titlePart = widget.title ? `${stripEmojis(widget.title)}. ` : ''
+      const pointsPart = widget.points.slice(0, 3).map(stripEmojis).join(', ')
       return `${titlePart}${pointsPart}`
     }
     case 'definition': {
-      const def = widget.definition.length > 140
+      const rawDef = widget.definition.length > 140
         ? `${widget.definition.slice(0, 137)}...`
         : widget.definition
-      return `${widget.term}. ${def}`
+      return `${stripEmojis(widget.term)}. ${stripEmojis(rawDef)}`
     }
     default:
       return ''
@@ -2552,7 +2639,7 @@ export function Overlay() {
               <div key={inst.id} style={containerStyle}>
                 <DraggableWidget
                   instanceId={inst.id}
-                  widget={inst.widget}
+                  widget={sanitizeWidget(inst.widget)}
                   delay={0}
                   initialOffset={inst.dragOffset}
                   onClose={closeInstance}
