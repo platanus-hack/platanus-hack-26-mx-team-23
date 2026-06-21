@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { KlaiMascot } from '../components/KlaiMascot'
 import {
   ResponseSchema,
   LayoutSchema,
@@ -692,29 +693,23 @@ export function Overlay() {
 
   return (
     <div style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'relative' }}>
-      {/* Loading indicator — anchored top-left of the video */}
+      {/* Loading indicator — Klai mascot anchored top-left of the video */}
       <AnimatePresence>
         {state.status === 'loading' && (
           <motion.div
             key="overlai-loading"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.18 }}
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ duration: 0.25, ease: [0.165, 0.84, 0.44, 1] }}
             style={{
               position: 'fixed',
               top: effectiveRect.top + SLOT_PADDING,
               left: effectiveRect.left + SLOT_PADDING,
-              background: 'rgba(0,0,0,0.6)',
-              color: '#facc15',
-              fontSize: 12,
-              padding: '6px 12px',
-              borderRadius: 8,
-              fontFamily: 'monospace',
               pointerEvents: 'none',
             }}
           >
-            Building layout...
+            <KlaiMascot phase="thinking" size={72} />
           </motion.div>
         )}
       </AnimatePresence>

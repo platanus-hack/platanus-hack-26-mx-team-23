@@ -16,36 +16,20 @@
 .left {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
   text-decoration: none;
 }
 
-.mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
+.logoImg {
   height: 30px;
-  border-radius: 7px;
-  background: var(--klai-accent);
-  color: #fff;
-  font-family: var(--font-clash);
-  font-weight: 700;
-  font-size: 16px;
-}
-
-.name {
-  font-family: var(--font-clash);
-  font-weight: 600;
-  font-size: 17px;
-  color: var(--klai-text);
-  letter-spacing: -0.03em;
+  width: auto;
+  object-fit: contain;
+  display: block;
 }
 
 .tagline {
@@ -67,12 +51,11 @@
   gap: 10px;
 }
 
+/* Strap como mini-label del grupo */
 .groupLabel {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--klai-text-subtle);
-  margin-bottom: 2px;
+  font-size: 10px !important;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
 }
 
 .link {

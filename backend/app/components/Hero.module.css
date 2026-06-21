@@ -1,172 +1,178 @@
+/* Hero — full viewport, Apple TV: imagen protagonista, texto encima */
 .hero {
-  position: relative;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  /* Sin padding-top: el nav flota sobre el hero */
+}
+
+/* Glow ambiental — uno, sutil */
+.glow {
+  position: absolute;
+  top: -160px;
+  left: -80px;
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, var(--klai-accent-glow) 0%, transparent 65%);
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+/* Layout 2 columnas */
+.inner {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 80px;
   align-items: center;
-  padding-top: 80px;
+  padding: 120px 0 100px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Columna de texto */
+.textCol {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.strapWrap {
+  display: inline-block;
+}
+
+/* Headline — muy grande, Apple TV usa tipografía enorme */
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(52px, 7.5vw, 104px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: var(--klai-text);
+}
+
+.lineWrap {
+  display: block;
   overflow: hidden;
 }
 
-/* Purple ambient glow behind content */
-.glow {
-  position: absolute;
-  top: -10%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 700px;
-  height: 700px;
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--klai-accent-glow) 0%, transparent 70%);
-  pointer-events: none;
-  filter: blur(40px);
+.line {
+  display: block;
 }
 
-.inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding-top: 80px;
-  padding-bottom: 80px;
-  gap: 0;
-}
-
-/* Badge */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: var(--klai-glass);
-  border: 1px solid var(--klai-glass-border);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--klai-text-muted);
-  letter-spacing: 0.04em;
-  margin-bottom: 32px;
-}
-
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--klai-accent);
-  box-shadow: 0 0 8px var(--klai-accent);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-/* Headline */
-.headline {
-  font-family: var(--font-clash);
-  font-weight: 700;
-  font-size: clamp(48px, 8vw, 96px);
-  line-height: 1.0;
-  letter-spacing: -0.04em;
-  color: var(--klai-text);
-  margin-bottom: 28px;
-}
-
-.accent {
+.lineAccent {
   color: var(--klai-accent);
 }
 
-/* Sub */
+/* Sub — elegante, no muy denso */
 .sub {
-  max-width: 540px;
-  font-size: clamp(16px, 2vw, 19px);
-  font-weight: 400;
-  line-height: 1.65;
+  font-size: clamp(15px, 1.6vw, 18px);
   color: var(--klai-text-muted);
-  margin-bottom: 40px;
+  line-height: 1.7;
+  max-width: 440px;
 }
 
 /* CTAs */
 .ctas {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 72px;
+  gap: 14px;
   flex-wrap: wrap;
-  justify-content: center;
 }
 
 .ctaPrimary {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 14px 28px;
-  border-radius: 12px;
+  border-radius: 30px;
   background: var(--klai-accent);
   color: #fff;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.01em;
-  transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+  letter-spacing: 0.01em;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  white-space: nowrap;
 }
 
 .ctaPrimary:hover {
-  opacity: 0.9;
-  box-shadow: 0 0 28px var(--klai-accent-glow);
-  transform: translateY(-2px);
-}
-
-.ctaPrimary:active {
-  transform: translateY(0) scale(0.98);
+  opacity: 0.84;
+  transform: scale(1.02);
 }
 
 .ctaSecondary {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 14px 24px;
-  border-radius: 12px;
-  border: 1px solid var(--klai-glass-border);
-  background: var(--klai-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  color: var(--klai-text-muted);
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.72);
   font-size: 15px;
   font-weight: 500;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
 }
 
 .ctaSecondary:hover {
-  color: var(--klai-text);
-  border-color: var(--klai-glass-border);
-  background: var(--klai-glass-hover);
-  transform: translateY(-1px);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
 }
 
-/* Video wrapper */
-.videoWrap {
-  width: 100%;
-  max-width: 860px;
+/* Monitor */
+.monitorCol {
+  position: relative;
 }
 
-@media (max-width: 640px) {
-  .hero {
-    padding-top: 64px;
+/* Tablet */
+@media (max-width: 1024px) {
+  .inner {
+    grid-template-columns: 1fr;
+    gap: 56px;
+    padding: 140px 0 80px;
   }
 
+  .textCol {
+    align-items: center;
+    text-align: center;
+  }
+
+  .sub {
+    max-width: 560px;
+    margin: 0 auto;
+  }
+
+  .headline {
+    align-items: center;
+  }
+
+  .ctas {
+    justify-content: center;
+  }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
   .inner {
-    padding-top: 40px;
+    padding: 120px 0 60px;
   }
 
   .ctas {
     flex-direction: column;
-    align-items: stretch;
+    width: 100%;
   }
 
   .ctaPrimary,
   .ctaSecondary {
+    width: 100%;
     justify-content: center;
   }
 }

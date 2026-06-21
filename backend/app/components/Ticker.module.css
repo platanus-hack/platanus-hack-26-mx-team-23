@@ -1,0 +1,52 @@
+.ticker {
+  width: 100%;
+  overflow: hidden;
+  background: rgba(16, 16, 24, 0.72);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border-top: 1px solid var(--klai-line);
+  border-bottom: 1px solid var(--klai-line);
+  height: 42px;
+  display: flex;
+  align-items: center;
+}
+
+.track {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: tickerScroll var(--ticker-speed) linear infinite;
+  will-change: transform;
+}
+
+.ticker:hover .track {
+  animation-play-state: paused;
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+  font-family: var(--font-satoshi), system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--klai-text-subtle);
+}
+
+.keyword {
+  color: var(--klai-accent);
+}
+
+.sep {
+  color: var(--klai-line);
+  font-size: 8px;
+  padding: 0 6px;
+}
+
+@keyframes tickerScroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}

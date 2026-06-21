@@ -1,3 +1,4 @@
+import Image from "next/image";
 import styles from "./Footer.module.css";
 
 export default function Footer() {
@@ -7,8 +8,13 @@ export default function Footer() {
       <div className={`container ${styles.inner}`}>
         <div className={styles.left}>
           <a href="/" className={styles.logo}>
-            <span className={styles.mark}>K</span>
-            <span className={styles.name}>Klai</span>
+            <Image
+              src="/klai-logo.png"
+              alt="Klai"
+              width={140}
+              height={70}
+              className={styles.logoImg}
+            />
           </a>
           <p className={styles.tagline}>
             Tu pregunta. La interfaz se genera sola.
@@ -17,13 +23,12 @@ export default function Footer() {
 
         <div className={styles.links}>
           <div className={styles.linkGroup}>
-            <span className={styles.groupLabel}>Producto</span>
+            <span className={`strap ${styles.groupLabel}`}>Producto</span>
             <a href="#casos" className={styles.link}>Casos de uso</a>
             <a href="#como-usar" className={styles.link}>Cómo funciona</a>
-            <a href="#pricing" className={styles.link}>Precio</a>
           </div>
           <div className={styles.linkGroup}>
-            <span className={styles.groupLabel}>Proyecto</span>
+            <span className={`strap ${styles.groupLabel}`}>Proyecto</span>
             <a href="https://github.com" target="_blank" rel="noopener noreferrer" className={styles.link}>GitHub</a>
             <a href="https://klai.pro" className={styles.link}>klai.pro</a>
           </div>

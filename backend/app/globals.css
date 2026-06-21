@@ -1,85 +1,58 @@
 /* ============================================================
-   Klai — Design tokens + glass system
+   Klai — Design tokens (dark-only, cinematic / Apple TV aesthetic)
    ============================================================ */
 
-/* Fontshare fonts loaded via <link> in layout.tsx to avoid Turbopack stripping @import */
-
-/* ---------- Dark theme (default) ---------- */
 :root {
-  --klai-bg:            #0A0A0F;
-  --klai-surface:       #101018;
-  --klai-glass:         rgba(16, 16, 24, 0.68);
-  --klai-glass-hover:   rgba(16, 16, 24, 0.80);
-  --klai-glass-border:  rgba(255, 255, 255, 0.08);
+  /* Backgrounds — dark con tinte violeta para que el glass se note */
+  --klai-bg:            #07060f;
+  --klai-surface:       #0d0c1a;
+
+  /* Glass — solo para widgets sobre video */
+  --klai-glass:         rgba(16, 16, 24, 0.72);
+  --klai-glass-hover:   rgba(16, 16, 24, 0.85);
+  --klai-glass-border:  rgba(255, 255, 255, 0.07);
   --klai-blur:          24px;
 
-  --klai-text:          #FFFFFF;
-  --klai-text-muted:    rgba(255, 255, 255, 0.5);
-  --klai-text-subtle:   rgba(255, 255, 255, 0.3);
+  /* Text */
+  --klai-text:          #ffffff;
+  --klai-text-muted:    rgba(255, 255, 255, 0.48);
+  --klai-text-subtle:   rgba(255, 255, 255, 0.26);
 
+  /* Brand accent */
   --klai-accent:        #8B7FFF;
-  --klai-accent-glow:   rgba(139, 127, 255, 0.28);
-  --klai-accent-dim:    rgba(139, 127, 255, 0.12);
+  --klai-accent-glow:   rgba(139, 127, 255, 0.22);
+  --klai-accent-dim:    rgba(139, 127, 255, 0.10);
 
+  /* Semantic */
   --klai-success:       #4ADE80;
   --klai-warning:       #FACC15;
-  --klai-error:         #F87171;
 
-  --klai-divider:       rgba(255, 255, 255, 0.06);
+  /* Lines */
+  --klai-divider:       rgba(255, 255, 255, 0.05);
+  --klai-line:          rgba(255, 255, 255, 0.08);
+  --klai-line-strong:   rgba(255, 255, 255, 0.14);
 
   /* Radii */
-  --r-widget: 16px;
-  --r-input:  12px;
-  --r-chip:   8px;
+  --r-widget: 14px;
+  --r-input:  10px;
+  --r-chip:   6px;
+  --r-strap:  3px;
 
   /* Shadows */
-  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--klai-glass-border);
-  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--klai-glass-border);
+  --klai-shadow:    0 24px 64px rgba(0, 0, 0, 0.7);
+  --klai-shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.5);
 
   /* Typography */
   --font-clash:   'Clash Display', system-ui, sans-serif;
   --font-satoshi: 'Satoshi', system-ui, sans-serif;
 
-  /* Spacing rhythm */
-  --section-y: 120px;
-  --section-y-mobile: 80px;
-  --content-max: 1200px;
-}
+  /* Spacing — más generoso, Apple TV respira mucho */
+  --section-y:        140px;
+  --section-y-mobile: 88px;
+  --content-max:      1200px;
 
-/* ---------- Light theme override ---------- */
-[data-theme="light"] {
-  --klai-bg:            #F4F4FB;
-  --klai-surface:       #FFFFFF;
-  --klai-glass:         rgba(255, 255, 255, 0.65);
-  --klai-glass-hover:   rgba(255, 255, 255, 0.85);
-  --klai-glass-border:  rgba(10, 10, 30, 0.08);
-
-  --klai-text:          #0A0A0F;
-  --klai-text-muted:    rgba(10, 10, 30, 0.55);
-  --klai-text-subtle:   rgba(10, 10, 30, 0.35);
-
-  --klai-divider:       rgba(10, 10, 30, 0.07);
-
-  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.1), 0 0 0 1px var(--klai-glass-border);
-  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.07), 0 0 0 1px var(--klai-glass-border);
-}
-
-/* ---------- Dark explicit override ---------- */
-[data-theme="dark"] {
-  --klai-bg:            #0A0A0F;
-  --klai-surface:       #101018;
-  --klai-glass:         rgba(16, 16, 24, 0.68);
-  --klai-glass-hover:   rgba(16, 16, 24, 0.80);
-  --klai-glass-border:  rgba(255, 255, 255, 0.08);
-
-  --klai-text:          #FFFFFF;
-  --klai-text-muted:    rgba(255, 255, 255, 0.5);
-  --klai-text-subtle:   rgba(255, 255, 255, 0.3);
-
-  --klai-divider:       rgba(255, 255, 255, 0.06);
-
-  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--klai-glass-border);
-  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--klai-glass-border);
+  /* Broadcast */
+  --strap-text: rgba(255, 255, 255, 0.55);
 }
 
 /* ---------- Reset ---------- */
@@ -108,7 +81,26 @@ body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Ambient orbs fijos — dan color que el backdrop-filter puede difuminar */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 1000px 800px at 5%  5%,  rgba(139, 127, 255, 0.22) 0%, transparent 65%),
+    radial-gradient(ellipse  700px 600px at 92% 30%, rgba(100,  80, 220, 0.16) 0%, transparent 65%),
+    radial-gradient(ellipse  800px 700px at 50% 75%, rgba(139, 127, 255, 0.14) 0%, transparent 65%),
+    radial-gradient(ellipse  500px 400px at 20% 60%, rgba(80,   60, 180, 0.10) 0%, transparent 65%);
+}
+
+/* Todo el contenido va sobre los orbs */
+body > * {
+  position: relative;
+  z-index: 1;
 }
 
 a {
@@ -121,7 +113,7 @@ img, video {
   display: block;
 }
 
-/* ---------- Utility: glass panel material ---------- */
+/* ---------- Glass panel ---------- */
 .glass-panel {
   background: var(--klai-glass);
   backdrop-filter: blur(var(--klai-blur)) saturate(160%);
@@ -131,16 +123,46 @@ img, video {
   box-shadow: var(--klai-shadow);
 }
 
-/* ---------- Layout container ---------- */
+/* ---------- Strap — label minimalista ---------- */
+.strap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--strap-text);
+  font-family: var(--font-satoshi), system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.strap::before {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 14px;
+  background: var(--klai-accent);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ---------- Container ---------- */
 .container {
   width: 100%;
   max-width: var(--content-max);
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 32px;
 }
 
 @media (max-width: 768px) {
   .container {
-    padding: 0 16px;
+    padding: 0 20px;
   }
+}
+
+/* ---------- Reduced-motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }

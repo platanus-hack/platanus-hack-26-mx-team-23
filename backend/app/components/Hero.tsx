@@ -1,77 +1,134 @@
 "use client";
 
-import { useRef } from "react";
-import { useGSAP } from "@gsap/react";
-import gsap from "gsap";
+import { motion, useReducedMotion } from "motion/react";
 import DemoVideo from "./DemoVideo";
 import styles from "./Hero.module.css";
 
-gsap.registerPlugin(useGSAP);
+const containerVariants = {
+  hidden: {},
+  show: {
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.2,
+    },
+  },
+};
+
+const strapVariant = {
+  hidden: { clipPath: "inset(0 100% 0 0)", opacity: 0 },
+  show: {
+    clipPath: "inset(0 0% 0 0)",
+    opacity: 1,
+    transition: { duration: 0.55, ease: [0.7, 0, 0.2, 1] as [number, number, number, number] },
+  },
+};
+
+const lineVariant = {
+  hidden: { y: "110%", opacity: 0 },
+  show: {
+    y: "0%",
+    opacity: 1,
+    transition: { type: "spring" as const, stiffness: 110, damping: 18 },
+  },
+};
+
+const fadeUpVariant = {
+  hidden: { y: 20, opacity: 0 },
+  show: {
+    y: 0,
+    opacity: 1,
+    transition: { type: "spring" as const, stiffness: 100, damping: 20 },
+  },
+};
+
+const monitorVariant = {
+  hidden: { scale: 0.96, opacity: 0 },
+  show: {
+    scale: 1,
+    opacity: 1,
+    transition: { type: "spring" as const, stiffness: 90, damping: 22, delay: 0.25 },
+  },
+};
 
 export default function Hero() {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const shouldReduce = useReducedMotion();
 
-  useGSAP(
-    () => {
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-      const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
-      tl.from(`.${styles.badge}`, { y: 16, opacity: 0, duration: 0.5 })
-        .from(`.${styles.headline}`, { y: 32, opacity: 0, duration: 0.7 }, "-=0.2")
-        .from(`.${styles.sub}`, { y: 24, opacity: 0, duration: 0.6 }, "-=0.4")
-        .from(`.${styles.ctas}`, { y: 20, opacity: 0, duration: 0.5 }, "-=0.35")
-        .from(`.${styles.videoWrap}`, { y: 40, opacity: 0, duration: 0.8, scale: 0.97 }, "-=0.3");
-    },
-    { scope: containerRef }
-  );
+  const cv = shouldReduce ? {} : containerVariants;
+  const sv = shouldReduce ? { hidden: {}, show: {} } : strapVariant;
+  const lv = shouldReduce ? { hidden: {}, show: {} } : lineVariant;
+  const fv = shouldReduce ? { hidden: {}, show: {} } : fadeUpVariant;
+  const mv = shouldReduce ? { hidden: {}, show: {} } : monitorVariant;
 
   return (
-    <section className={styles.hero} ref={containerRef}>
-      {/* Background glow */}
-      <div className={styles.glow} aria-hidden />
+    <section className={styles.hero}>
+      {/* Glow ambiental — uno solo, intencional */}
+      <div className={styles.glow} aria-hidden="true" />
 
       <div className={`container ${styles.inner}`}>
-        <div className={styles.badge}>
-          <span className={styles.dot} />
-          Hackathon Platanus 2026 · UI Generativa · Gratis
-        </div>
+        {/* Columna de texto */}
+        <motion.div
+          className={styles.textCol}
+          variants={cv}
+          initial="hidden"
+          animate="show"
+        >
+          {/* Headline — cada línea en su máscara overflow:hidden */}
+          <h1 className={styles.headline}>
+            <span className={styles.lineWrap}>
+              <motion.span className={styles.line} variants={lv}>
+                Hablas.
+              </motion.span>
+            </span>
+            <span className={styles.lineWrap}>
+              <motion.span className={`${styles.line} ${styles.lineAccent}`} variants={lv}>
+                La interfaz
+              </motion.span>
+            </span>
+            <span className={styles.lineWrap}>
+              <motion.span className={styles.line} variants={lv}>
+                se construye sola.
+              </motion.span>
+            </span>
+          </h1>
 
-        <h1 className={styles.headline}>
-          Hablas.
-          <br />
-          <span className={styles.accent}>La interfaz</span>
-          <br />
-          se construye sola.
-        </h1>
+          {/* Sub */}
+          <motion.p className={styles.sub} variants={fv}>
+            Klai es una extensión para Chrome que convierte tus preguntas en
+            widgets animados sobre cualquier video — fútbol, series, música.
+            En tiempo real, sin menús.
+          </motion.p>
 
-        <p className={styles.sub}>
-          Klai es una extensión para Chrome que convierte tus preguntas en widgets animados
-          sobre cualquier video — fútbol, series, música. En tiempo real, sin menús.
-        </p>
+          {/* CTAs */}
+          <motion.div className={styles.ctas} variants={fv}>
+            <a href="#" className={styles.ctaPrimary}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14M5 12l7 7 7-7" />
+              </svg>
+              Agregar a Chrome — gratis
+            </a>
+            <a
+              href="https://github.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.ctaSecondary}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+              </svg>
+              Ver código en GitHub
+            </a>
+          </motion.div>
+        </motion.div>
 
-        <div className={styles.ctas}>
-          <a href="#" className={styles.ctaPrimary}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
-            </svg>
-            Agregar a Chrome — gratis
-          </a>
-          <a
-            href="https://github.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.ctaSecondary}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2A10 10 0 0 0 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0 0 12 2z" />
-            </svg>
-            Ver código en GitHub
-          </a>
-        </div>
-
-        <div className={styles.videoWrap}>
+        {/* Monitor / DemoVideo */}
+        <motion.div
+          className={styles.monitorCol}
+          variants={mv}
+          initial="hidden"
+          animate="show"
+        >
           <DemoVideo />
-        </div>
+        </motion.div>
       </div>
     </section>
   );

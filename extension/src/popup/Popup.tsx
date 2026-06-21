@@ -1,32 +1,22 @@
 import { useState, useEffect } from 'react'
 import { recognizeOnce, isSpeechSupported } from '../lib/voice'
+import { KlaiMascot } from '../components/KlaiMascot'
 
 type Status = 'idle' | 'listening' | 'sending' | 'done' | 'error'
 
-/** Max width (px) for the downscaled screenshot sent to the backend. */
 const SCREENSHOT_MAX_WIDTH = 1280
 
-/**
- * Downscale a data URL to at most SCREENSHOT_MAX_WIDTH wide, re-encoding as JPEG.
- * If the image is already narrower, it is returned unchanged.
- */
 async function downscaleDataUrl(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image()
     img.onload = () => {
-      if (img.width <= SCREENSHOT_MAX_WIDTH) {
-        resolve(dataUrl)
-        return
-      }
+      if (img.width <= SCREENSHOT_MAX_WIDTH) { resolve(dataUrl); return }
       const scale = SCREENSHOT_MAX_WIDTH / img.width
       const canvas = document.createElement('canvas')
       canvas.width = SCREENSHOT_MAX_WIDTH
       canvas.height = Math.round(img.height * scale)
       const ctx = canvas.getContext('2d')
-      if (!ctx) {
-        resolve(dataUrl)
-        return
-      }
+      if (!ctx) { resolve(dataUrl); return }
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
       resolve(canvas.toDataURL('image/jpeg', 0.8))
     }
@@ -35,16 +25,11 @@ async function downscaleDataUrl(dataUrl: string): Promise<string> {
   })
 }
 
-/**
- * Capture the visible tab as a JPEG data URL.
- * Returns null if capture is not available (e.g. protected page).
- */
 async function captureTab(): Promise<string | null> {
   try {
     const raw = await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality: 70 })
     return await downscaleDataUrl(raw)
   } catch {
-    // captureVisibleTab can fail on chrome:// pages, extension pages, etc.
     return null
   }
 }
@@ -57,50 +42,64 @@ async function sendToActiveTab(text: string, image: string | null): Promise<void
   await chrome.tabs.sendMessage(tab.id, message)
 }
 
+function statusToPhase(status: Status, intro: 'idle' | 'thinking' | 'done'): 'idle' | 'thinking' | 'done' {
+  // During intro animation, ignore status
+  if (intro !== 'done') return intro
+  if (status === 'sending') return 'thinking'
+  if (status === 'done') return 'done'
+  return 'done' // stay as ball after intro completes
+}
+
+function statusLabel(status: Status): string {
+  if (status === 'listening') return 'Escuchando...'
+  if (status === 'sending') return 'Generando respuesta...'
+  if (status === 'done') return '¡Listo!'
+  if (status === 'error') return 'Algo salió mal'
+  return ''
+}
+
 export function Popup() {
   const [text, setText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
-  const [statusMsg, setStatusMsg] = useState('')
   const [watchMode, setWatchMode] = useState(false)
-
+  const [intro, setIntro] = useState<'idle' | 'thinking' | 'done'>('idle')
   const speechAvailable = isSpeechSupported()
 
-  // Load persisted watch mode state on mount.
+  // Intro animation on mount: blob → thinking → ball
+  useEffect(() => {
+    const t1 = setTimeout(() => setIntro('thinking'), 300)
+    const t2 = setTimeout(() => setIntro('done'), 1100)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [])
+
   useEffect(() => {
     chrome.storage.local.get('watchMode', (result) => {
-      if (typeof result.watchMode === 'boolean') {
-        setWatchMode(result.watchMode)
-      }
+      if (typeof result.watchMode === 'boolean') setWatchMode(result.watchMode)
     })
   }, [])
+
+  // Auto-reset done state after 2.5s
+  useEffect(() => {
+    if (status === 'done') {
+      const t = setTimeout(() => setStatus('idle'), 2500)
+      return () => clearTimeout(t)
+    }
+  }, [status])
 
   async function handleWatchToggle() {
     const next = !watchMode
     setWatchMode(next)
     chrome.storage.local.set({ watchMode: next })
-
-    // Notify the active tab's content script immediately.
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, { type: 'OVERLAI_WATCH', enabled: next })
-      }
-    } catch {
-      // Tab may not have the content script (e.g. chrome:// pages) — ignore.
-    }
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'OVERLAI_WATCH', enabled: next })
+    } catch { /* protected page */ }
   }
 
   async function handleMic() {
     setStatus('listening')
-    setStatusMsg('Listening...')
-
     const result = await recognizeOnce()
-    if (!result.ok) {
-      setStatus('error')
-      setStatusMsg(result.error)
-      return
-    }
-
+    if (!result.ok) { setStatus('error'); return }
     setText(result.text)
     await submitText(result.text)
   }
@@ -113,93 +112,159 @@ export function Popup() {
 
   async function submitText(query: string) {
     setStatus('sending')
-    setStatusMsg(`Sending: "${query}"`)
     try {
-      // Capture a screenshot of the visible tab so the backend can read on-screen graphics.
-      // Falls back to text-only if the page is protected or capture fails.
       const image = await captureTab()
       await sendToActiveTab(query, image)
       setStatus('done')
-      setStatusMsg('Widget sent to page!')
-    } catch (err) {
+      setText('')
+    } catch {
       setStatus('error')
-      setStatusMsg(err instanceof Error ? err.message : 'Failed to send')
     }
   }
 
-  const micLabel =
-    status === 'listening'
-      ? '... Listening'
-      : status === 'sending'
-        ? 'Sending...'
-        : '🎤 Speak'
+  const busy = status === 'listening' || status === 'sending'
+  const label = statusLabel(status)
 
   return (
-    <div className="w-72 p-4 bg-gray-900 text-white font-sans">
-      <h1 className="text-lg font-bold mb-1 text-yellow-400">Overlai</h1>
-      <p className="text-xs text-gray-400 mb-4">Voice-driven overlay engine</p>
+    <div style={{
+      width: 280,
+      background: '#0A0A0F',
+      color: '#fff',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      padding: '20px 16px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 0,
+    }}>
+      {/* Mascot */}
+      <div style={{ marginBottom: 12 }}>
+        <KlaiMascot phase={statusToPhase(status, intro)} size={100} />
+      </div>
 
-      {/* Mic button — only shown when speech is available */}
+      {/* Brand */}
+      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', color: '#fff' }}>
+          klai
+        </div>
+        {label ? (
+          <div style={{
+            fontSize: 11,
+            color: status === 'error' ? '#F87171' : status === 'done' ? '#4ADE80' : 'rgba(255,255,255,0.45)',
+            marginTop: 2,
+            transition: 'color 0.3s',
+          }}>
+            {label}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>
+            ¿Qué quieres saber?
+          </div>
+        )}
+      </div>
+
+      {/* Mic button */}
       {speechAvailable && (
         <button
-          className="w-full py-3 rounded-xl bg-yellow-400 text-black font-bold text-sm mb-3 cursor-pointer hover:bg-yellow-300 transition-colors disabled:opacity-50"
           onClick={handleMic}
-          disabled={status === 'listening' || status === 'sending'}
+          disabled={busy}
+          style={{
+            width: '100%',
+            padding: '10px 0',
+            borderRadius: 12,
+            border: 'none',
+            background: status === 'listening'
+              ? 'rgba(139,127,255,0.35)'
+              : 'rgba(139,127,255,0.18)',
+            color: '#8B7FFF',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: busy ? 'not-allowed' : 'pointer',
+            marginBottom: 8,
+            transition: 'background 0.2s',
+            outline: status === 'listening' ? '1.5px solid #8B7FFF' : '1.5px solid rgba(139,127,255,0.3)',
+          }}
         >
-          {micLabel}
+          {status === 'listening' ? '● Escuchando...' : '🎤  Hablar'}
         </button>
       )}
 
-      {/* Text input fallback (always visible) */}
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      {/* Text input */}
+      <form onSubmit={handleSubmit} style={{ width: '100%', display: 'flex', gap: 6 }}>
         <input
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder='e.g. "who&apos;s winning?"'
-          className="flex-1 px-3 py-2 rounded-lg bg-gray-800 text-white text-sm border border-gray-700 focus:outline-none focus:border-yellow-400"
-          disabled={status === 'listening' || status === 'sending'}
+          placeholder="¿Quién va ganando?"
+          disabled={busy}
+          style={{
+            flex: 1,
+            padding: '9px 12px',
+            borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.1)',
+            background: 'rgba(255,255,255,0.05)',
+            color: '#fff',
+            fontSize: 12,
+            outline: 'none',
+          }}
         />
         <button
           type="submit"
-          className="px-3 py-2 rounded-lg bg-yellow-400 text-black font-bold text-sm hover:bg-yellow-300 transition-colors disabled:opacity-50"
-          disabled={!text.trim() || status === 'listening' || status === 'sending'}
+          disabled={!text.trim() || busy}
+          style={{
+            padding: '9px 14px',
+            borderRadius: 10,
+            border: 'none',
+            background: text.trim() && !busy ? '#8B7FFF' : 'rgba(139,127,255,0.2)',
+            color: text.trim() && !busy ? '#fff' : 'rgba(255,255,255,0.3)',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: text.trim() && !busy ? 'pointer' : 'not-allowed',
+            transition: 'background 0.2s',
+          }}
         >
-          Go
+          →
         </button>
       </form>
 
-      {/* Watch mode toggle */}
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-700">
-        <span className="text-xs text-gray-400">Watch mode</span>
+      {/* Watch mode */}
+      <div style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 14,
+        paddingTop: 12,
+        borderTop: '1px solid rgba(255,255,255,0.07)',
+      }}>
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+          {watchMode ? '👁 Modo watch activo' : 'Modo watch'}
+        </span>
         <button
           onClick={handleWatchToggle}
-          className={`relative inline-flex items-center w-10 h-5 rounded-full transition-colors focus:outline-none ${
-            watchMode ? 'bg-yellow-400' : 'bg-gray-600'
-          }`}
-          title={watchMode ? 'Watch mode ON — auto-detecting events' : 'Watch mode OFF'}
+          style={{
+            width: 36,
+            height: 20,
+            borderRadius: 999,
+            border: 'none',
+            background: watchMode ? '#8B7FFF' : 'rgba(255,255,255,0.12)',
+            cursor: 'pointer',
+            position: 'relative',
+            transition: 'background 0.2s',
+          }}
         >
-          <span
-            className={`inline-block w-4 h-4 bg-white rounded-full shadow transform transition-transform ${
-              watchMode ? 'translate-x-5' : 'translate-x-1'
-            }`}
-          />
+          <span style={{
+            position: 'absolute',
+            top: 2,
+            left: watchMode ? 18 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: '50%',
+            background: '#fff',
+            transition: 'left 0.2s',
+          }} />
         </button>
       </div>
-      {watchMode && (
-        <p className="text-xs text-yellow-400 text-center mt-1">Watching for events...</p>
-      )}
-
-      {/* Status line */}
-      {statusMsg && (
-        <p
-          className={`mt-3 text-xs text-center ${
-            status === 'error' ? 'text-red-400' : status === 'done' ? 'text-green-400' : 'text-gray-400'
-          }`}
-        >
-          {statusMsg}
-        </p>
-      )}
     </div>
   )
 }

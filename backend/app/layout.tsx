@@ -27,17 +27,6 @@ export const metadata: Metadata = {
   },
 };
 
-/* Anti-flash: reads localStorage and prefers-color-scheme before first paint */
-const themeScript = `
-(function(){
-  try {
-    var stored = localStorage.getItem('klai-theme');
-    var pref = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    document.documentElement.setAttribute('data-theme', pref);
-  } catch(e) {}
-})();
-`;
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -46,7 +35,6 @@ export default function RootLayout({
   return (
     <html lang="es" className={`${geistSans.variable} ${geistMono.variable}`}>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <link rel="preconnect" href="https://api.fontshare.com" />
         <link
           rel="stylesheet"

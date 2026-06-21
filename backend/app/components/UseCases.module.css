@@ -1,157 +1,272 @@
+/* ================================================================
+   UseCases — Scroll cinematográfico estilo Apple TV
+   ================================================================ */
+
+/* ---- Scroll mode (default) ---- */
+
 .section {
-  padding: var(--section-y) 0;
+  position: relative;
 }
 
-/* Header */
-.sectionHeader {
-  text-align: center;
-  margin-bottom: 80px;
-}
-
-.sectionBadge {
-  display: inline-flex;
+/* Intro — sección propia de 100vh, flujo normal */
+.introPart {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: var(--klai-accent-dim);
-  color: var(--klai-accent);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  margin-bottom: 20px;
+  justify-content: center;
+  text-align: center;
+  padding: 120px 40px 80px;
+  gap: 24px;
+  background: radial-gradient(ellipse at 50% 100%, rgba(139,127,255,0.06) 0%, transparent 70%);
 }
 
-.sectionTitle {
+.introTitle {
   font-family: var(--font-clash);
   font-weight: 700;
-  font-size: clamp(36px, 5vw, 60px);
-  line-height: 1.05;
-  letter-spacing: -0.03em;
+  font-size: clamp(52px, 9vw, 120px);
+  line-height: 1.0;
+  letter-spacing: -0.04em;
   color: var(--klai-text);
-  margin-bottom: 18px;
 }
 
+.introSub {
+  max-width: 520px;
+  font-size: 17px;
+  color: var(--klai-text-muted);
+  line-height: 1.7;
+}
+
+/* Una sección de 100vh por card */
+.cardSection {
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+}
+
+/* Ambient blur — color de la imagen, saturación moderada */
+.ambientBlur {
+  position: absolute;
+  inset: -15%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(70px) saturate(1.1) brightness(0.65);
+  transform: scale(1.2);
+  z-index: 0;
+}
+
+/* Glass exterior — frosted sobre el ambient para suavizar el color */
+.glassExterior {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: rgba(8, 6, 15, 0.32);
+  backdrop-filter: blur(8px) saturate(0.7);
+  -webkit-backdrop-filter: blur(8px) saturate(0.7);
+  pointer-events: none;
+}
+
+/* Scrim — vignette sutil */
+.scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 30%, rgba(0,0,0,0.30) 100%),
+    linear-gradient(to bottom, rgba(0,0,0,0.20) 0%, transparent 40%, rgba(0,0,0,0.20) 100%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Stage — centrado sobre el glass, flujo relativo */
+.stage {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 40px 40px;
+  width: 100%;
+  pointer-events: none;
+}
+
+/* Card frame — la imagen con widgets, centrada en pantalla */
+.cardFrame {
+  position: relative;
+  width: min(90vw, 1080px);
+  aspect-ratio: 16 / 10;
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow:
+    0 40px 120px rgba(0,0,0,0.75),
+    0 0 0 1px rgba(255,255,255,0.07);
+  pointer-events: auto;
+}
+
+/* Imagen de fondo del card */
+.cardImg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Overlay cinematográfico sobre la imagen */
+.cardOverlay {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.28) 45%, rgba(0,0,0,0.08) 100%);
+  z-index: 1;
+}
+
+/* Scanlines sutiles */
+.scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 3px,
+    rgba(255,255,255,0.008) 3px,
+    rgba(255,255,255,0.008) 4px
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Widget glass flotando sobre la imagen */
+.widgetFloat {
+  position: absolute;
+  z-index: 3;
+  padding: 14px 18px;
+  border-radius: 12px;
+  max-width: 240px;
+}
+
+.pos_bottom_left  { bottom: 80px; left: 20px; }
+.pos_bottom_right { bottom: 80px; right: 20px; }
+
+/* Texto en la parte baja del card */
+.cardText {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cardIndex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cardIconTile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--klai-accent);
+}
+
+.cardLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.cardQuestion {
+  font-family: var(--font-clash);
+  font-weight: 600;
+  font-size: clamp(17px, 1.8vw, 22px);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+
+.cardDesc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255,255,255,0.52);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Progress dots */
+.dots {
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+}
+
+/* Shared accent */
 .accentText {
   color: var(--klai-accent);
 }
 
-.sectionSub {
-  max-width: 480px;
-  margin: 0 auto;
-  font-size: 16px;
-  color: var(--klai-text-muted);
-  line-height: 1.65;
-}
+/* ================================================================
+   Widget designs (unchanged from original)
+   ================================================================ */
 
-/* Cases list */
-.cases {
-  display: flex;
-  flex-direction: column;
-  gap: 100px;
-}
-
-/* Individual case */
-.case {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: center;
-  gap: 64px;
-  min-height: 380px;
-}
-
-.caseReverse {
-  direction: rtl;
-}
-
-.caseReverse > * {
-  direction: ltr;
-}
-
-/* Case text */
-.caseText {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.caseEmoji {
-  font-size: 32px;
-  line-height: 1;
-}
-
-.caseLabel {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--klai-accent);
-}
-
-.caseQuestion {
-  font-family: var(--font-clash);
-  font-weight: 600;
-  font-size: clamp(28px, 3vw, 40px);
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-  color: var(--klai-text);
-}
-
-.caseDesc {
-  font-size: 16px;
-  line-height: 1.7;
-  color: var(--klai-text-muted);
-  max-width: 400px;
-}
-
-/* Widget container — parallax target */
-.widgetWrap {
-  display: flex;
-  justify-content: center;
-  will-change: transform;
-}
-
-.widgetCard_outer {
-  width: 100%;
-  max-width: 320px;
-  padding: 28px;
-}
-
-/* ---- Widget designs ---- */
-
-/* Scoreboard */
 .widgetScoreboard {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .wRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
-.wRowR {
-  flex-direction: row-reverse;
-}
+.wRowR { flex-direction: row-reverse; }
 
-.wFlag {
-  font-size: 20px;
-}
-
-.wTeam {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--klai-text-muted);
+.wCode {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.5);
+  font-family: var(--font-geist-mono), monospace;
 }
 
 .wScore {
   font-family: var(--font-geist-mono), monospace;
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--klai-accent);
   font-variant-numeric: tabular-nums;
-  min-width: 28px;
+  min-width: 20px;
   text-align: center;
 }
 
@@ -164,67 +279,68 @@
 
 .wMin {
   font-family: var(--font-geist-mono), monospace;
-  font-size: 11px;
-  color: var(--klai-text-subtle);
+  font-size: 9px;
+  color: rgba(255,255,255,0.30);
 }
 
-/* Info card */
 .widgetCard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 9px;
 }
 
 .wCardTop {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .wAvatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
   background: var(--klai-accent-dim);
   color: var(--klai-accent);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 10px;
   font-weight: 700;
+  font-family: var(--font-geist-mono), monospace;
   flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.08);
 }
 
 .wCardName {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--klai-text);
+  color: #fff;
 }
 
 .wCardRole {
-  font-size: 12px;
-  color: var(--klai-text-muted);
+  font-size: 11px;
+  color: rgba(255,255,255,0.50);
 }
 
 .wCardSerie {
-  font-size: 11px;
-  color: var(--klai-text-subtle);
-  padding-top: 8px;
-  border-top: 1px solid var(--klai-divider);
+  font-size: 10px;
+  color: rgba(255,255,255,0.32);
+  padding-top: 7px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  letter-spacing: 0.02em;
 }
 
-/* Music widget */
 .widgetMusic {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .wMusicBar {
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 36px;
+  height: 24px;
 }
 
 .wMusicBarItem {
@@ -237,74 +353,188 @@
 
 @keyframes barBounce {
   from { transform: scaleY(0.4); opacity: 0.4; }
-  to   { transform: scaleY(1); opacity: 0.9; }
+  to   { transform: scaleY(1);   opacity: 0.9; }
 }
 
 .wMusicName {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--klai-text);
+  color: #fff;
 }
 
 .wMusicAlbum {
-  font-size: 11px;
-  color: var(--klai-text-muted);
+  font-size: 10px;
+  color: rgba(255,255,255,0.45);
+  letter-spacing: 0.02em;
 }
 
-/* Alert widget */
 .widgetAlert {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
 }
 
 .wAlertIcon {
-  font-size: 24px;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--klai-accent-dim);
-  border-radius: 10px;
+  color: var(--klai-accent);
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.08);
   flex-shrink: 0;
 }
 
 .wAlertTitle {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--klai-text);
+  color: #fff;
 }
 
 .wAlertSub {
-  font-size: 12px;
-  color: var(--klai-text-muted);
+  font-size: 10px;
+  color: rgba(255,255,255,0.45);
   margin-top: 2px;
 }
 
-/* Mobile */
-@media (max-width: 768px) {
-  .case {
-    grid-template-columns: 1fr;
-    gap: 40px;
-    min-height: unset;
-  }
+/* ================================================================
+   Static fallback (prefers-reduced-motion)
+   ================================================================ */
 
-  .caseReverse {
-    direction: ltr;
-  }
+.sectionStatic {
+  padding: var(--section-y) 0;
+}
 
-  .widgetCard_outer {
-    max-width: 100%;
-  }
+.sectionHeader {
+  margin-bottom: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
 
-  .cases {
-    gap: 64px;
+.sectionTitle {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(40px, 5.5vw, 68px);
+  line-height: 1.0;
+  letter-spacing: -0.04em;
+  color: var(--klai-text);
+}
+
+.sectionSub {
+  max-width: 520px;
+  font-size: 17px;
+  color: var(--klai-text-muted);
+  line-height: 1.7;
+}
+
+.staticList {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.staticItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 70vh;
+  border-radius: 22px;
+  overflow: hidden;
+  padding: 48px 40px;
+}
+
+.staticAmbient {
+  position: absolute;
+  inset: -15%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(60px) saturate(1.4) brightness(0.4);
+  transform: scale(1.3);
+}
+
+.staticItem::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.65) 100%);
+  z-index: 1;
+}
+
+.staticItem .cardFrame {
+  position: relative;
+  z-index: 2;
+}
+
+/* ================================================================
+   Responsive
+   ================================================================ */
+
+@media (max-width: 1100px) {
+  .cardFrame {
+    width: min(92vw, 900px);
   }
 }
 
-@media (max-width: 480px) {
-  .section {
-    padding: var(--section-y-mobile) 0;
+@media (max-width: 900px) {
+  .introPart {
+    padding: 100px 24px 60px;
+    gap: 18px;
+  }
+
+  .introTitle {
+    font-size: clamp(40px, 11vw, 80px);
+  }
+
+  .introSub {
+    font-size: 15px;
+  }
+
+  .cardFrame {
+    width: 95vw;
+    aspect-ratio: 4 / 3;
+  }
+
+  .stage {
+    padding: 80px 16px 20px;
+  }
+
+  .dots {
+    right: 12px;
+  }
+}
+
+@media (max-width: 540px) {
+  .introPart {
+    padding: 80px 20px 48px;
+  }
+
+  .cardFrame {
+    aspect-ratio: 3 / 4;
+  }
+
+  .widgetFloat {
+    max-width: 180px;
+    padding: 10px 12px;
+  }
+
+  .pos_bottom_left  { bottom: 72px; left: 14px; }
+  .pos_bottom_right { bottom: 72px; right: 14px; }
+
+  .cardText {
+    padding: 16px 16px;
+  }
+
+  .dots {
+    right: 8px;
+  }
+
+  .staticItem {
+    min-height: 80vh;
+    padding: 32px 20px;
   }
 }
