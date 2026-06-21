@@ -4,13 +4,27 @@
 //      returning a suggestion (or null) to the requesting content script.
 //   2. Lifecycle logging.
 
+import { ensureContentScript } from '../lib/ensure-content-script'
+
 // Backend base URL — set VITE_BACKEND_BASE_URL at build time (e.g. the Vercel URL).
 // Falls back to localhost for local development.
 const BACKEND_BASE_URL =
   import.meta.env.VITE_BACKEND_BASE_URL ?? 'http://localhost:3000'
+const OFFSCREEN_PATH = 'offscreen.html'
+const PERMISSION_PATH = 'permission.html'
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Overlai] Extension installed — background service worker ready.')
+  // First install → open the mic permission page (a popup/offscreen can't prompt).
+  if (details.reason === 'install') {
+    chrome.tabs.create({ url: chrome.runtime.getURL(PERMISSION_PATH) })
+  }
+  // Pre-warm the offscreen recorder so its listener is ready before the first use.
+  void ensureOffscreen()
+})
+
+chrome.runtime.onStartup?.addListener(() => {
+  void ensureOffscreen()
 })
 
 // ---------------------------------------------------------------------------
@@ -77,5 +91,111 @@ async function handleDetect(
   } catch (err) {
     console.warn('[Overlai SW] Detect fetch failed:', err)
     sendResponse(null)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Voice path (shortcut + popup) — records via the offscreen doc, transcribes,
+// then forwards { text, image } to the content script (same OVERLAI_TEXT channel).
+// ---------------------------------------------------------------------------
+
+function openPermissionPage(): void {
+  chrome.tabs.create({ url: chrome.runtime.getURL(PERMISSION_PATH) })
+}
+
+// Ensure the offscreen recorder document exists (idempotent).
+async function ensureOffscreen(): Promise<void> {
+  const has = await chrome.offscreen.hasDocument?.()
+  if (has) return
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_PATH,
+    reasons: [chrome.offscreen.Reason.USER_MEDIA],
+    justification: 'Record the microphone for hands-free voice commands.',
+  })
+}
+
+// Ensure the offscreen doc exists, then tell it to record. Retries because a
+// freshly-created doc may not have its listener ready ("Receiving end ...").
+async function startVoiceCapture(): Promise<void> {
+  try {
+    await ensureOffscreen()
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await chrome.runtime.sendMessage({ target: 'offscreen', type: 'START_RECORDING' })
+        return
+      } catch {
+        await new Promise((r) => setTimeout(r, 200))
+      }
+    }
+    console.error('[Overlai SW] offscreen never acknowledged START_RECORDING')
+  } catch (err) {
+    console.error('[Overlai SW] failed to start recording:', err)
+  }
+}
+
+// Keyboard shortcut → start a recording.
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== 'trigger-overlai') return
+  void startVoiceCapture()
+})
+
+// Voice messages from the popup button and the offscreen recorder.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'POPUP_START_RECORDING') {
+    void startVoiceCapture()
+  } else if (msg?.type === 'OVERLAI_AUDIO' && typeof msg.audio === 'string') {
+    void handleAudio(msg.audio, msg.mimeType)
+  } else if (msg?.type === 'OVERLAI_AUDIO_ERROR') {
+    console.warn('[Overlai SW] recorder error:', msg.error)
+    if (typeof msg.error === 'string' && /permission|notallowed|denied|dismiss/i.test(msg.error)) {
+      openPermissionPage()
+    }
+  }
+})
+
+async function handleAudio(audioDataUrl: string, mimeType?: string): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+
+  // Screenshot of the visible tab (best-effort).
+  let image: string | null = null
+  try {
+    if (tab?.windowId != null) {
+      image = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 })
+    }
+  } catch {
+    image = null
+  }
+
+  // Transcribe via the backend (key stays server-side).
+  let text = ''
+  try {
+    const res = await fetch(`${BACKEND_BASE_URL}/api/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: audioDataUrl, mimeType }),
+    })
+    if (!res.ok) throw new Error(`transcribe returned ${res.status}`)
+    const json = (await res.json()) as { text?: string }
+    text = json.text ?? ''
+  } catch (err) {
+    console.error('[Overlai SW] transcription failed:', err)
+    return
+  }
+
+  if (!text.trim()) {
+    console.warn('[Overlai SW] empty transcript — ignoring.')
+    return
+  }
+
+  // Deliver to the content script (inject it first if the tab doesn't have it).
+  if (tab?.id != null) {
+    const message: { type: string; text: string; image?: string } = { type: 'OVERLAI_TEXT', text }
+    if (image) message.image = image
+    try {
+      await ensureContentScript(tab.id)
+      await chrome.tabs.sendMessage(tab.id, message)
+    } catch (err) {
+      console.warn('[Overlai SW] could not deliver to tab:', err)
+    }
   }
 }

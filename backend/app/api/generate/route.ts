@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { WidgetNodeSchema, LayoutSchema, ResponseSchema } from '@/lib/schema'
+import { DATA_TOOLS, runTool } from '@/lib/tools'
 
 // Hardcoded fallback returned when ANTHROPIC_API_KEY is missing (dev without a key).
 // Returns a valid Layout so the no-key path exercises the new schema.
@@ -236,10 +237,26 @@ Call render_layout with the best matching layout.`
   // Prefixed field names (momentum_teams, kp_points, def_term, def_definition,
   // infocard_title, infocard_body, infocard_accent) avoid collision when multiple
   // widget types share semantically similar field names in the same flat object.
-  const response = await client.messages.create({
+  // System guidance for the agent loop: research with web_research when the answer
+  // isn't on screen, then finish with render_layout.
+  const GENERATE_SYSTEM = `You are Overlai, a generative overlay assistant for live video.
+You have two tools:
+- web_research: look up REAL facts you cannot get from the screenshot — a person/player identity, current news, real statistics, definitions, prices. Use it when the request needs outside knowledge. You may call it more than once; prefer one focused query.
+- render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step.
+Policy: for data visible on screen (live score, on-screen text) read the screenshot; for facts NOT on screen, call web_research first, then render_layout. If a tool fails or returns nothing, render the best answer you can. Always finish by calling render_layout.`
+
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
+  const MAX_ROUNDS = 5
+  let toolUse: Anthropic.ToolUseBlock | null = null
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const isLast = round === MAX_ROUNDS - 1
+    const response = await client.messages.create({
     model,
     max_tokens: 2048,
+    system: GENERATE_SYSTEM,
     tools: [
+      ...DATA_TOOLS,
       {
         name: 'render_layout',
         description:
@@ -430,15 +447,47 @@ Call render_layout with the best matching layout.`
         },
       },
     ],
-    tool_choice: { type: 'tool', name: 'render_layout' },
-    messages: [{ role: 'user', content: userContent }],
+    // On the last allowed round force render_layout so we always get a layout.
+    tool_choice: isLast
+      ? { type: 'tool', name: 'render_layout' }
+      : { type: 'auto' },
+    messages,
   })
 
-  // Extract the tool_use block — tool_choice forces exactly one.
-  const toolUse = response.content.find((block) => block.type === 'tool_use')
-  if (!toolUse || toolUse.type !== 'tool_use') {
+    const toolUses = response.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
+    )
+
+    // Terminal: render_layout called → capture its input and stop.
+    const renderCall = toolUses.find((t) => t.name === 'render_layout')
+    if (renderCall) {
+      toolUse = renderCall
+      break
+    }
+
+    // No tool call → nudge toward rendering and retry.
+    if (toolUses.length === 0) {
+      messages.push({ role: 'assistant', content: response.content })
+      messages.push({
+        role: 'user',
+        content: 'Call render_layout now with the best layout you can from what you know.',
+      })
+      continue
+    }
+
+    // Execute data tools (web_research) and feed results back as tool_result.
+    messages.push({ role: 'assistant', content: response.content })
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+    for (const tu of toolUses) {
+      const out = await runTool(tu.name, tu.input)
+      toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: out })
+    }
+    messages.push({ role: 'user', content: toolResults })
+  }
+
+  if (!toolUse) {
     return Response.json(
-      { error: 'Claude did not return a tool_use block' },
+      { error: 'Claude did not return a render_layout call' },
       { status: 502, headers: CORS_HEADERS }
     )
   }

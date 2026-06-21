@@ -3,8 +3,17 @@
   "name": "Overlai",
   "version": "0.1.0",
   "description": "Voice-driven generative overlay engine for live video",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "offscreen"],
   "host_permissions": ["<all_urls>"],
+  "commands": {
+    "trigger-overlai": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Activar Overlai por voz (oye sens)"
+    }
+  },
   "action": {
     "default_popup": "index.html",
     "default_title": "Overlai"
