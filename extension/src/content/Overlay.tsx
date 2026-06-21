@@ -1507,6 +1507,20 @@ export function Overlay() {
           lastAutoScoreHashRef.current = ''
           break
         }
+        case 'narration': {
+          // Toggle voice narration and persist the preference so the popup toggle
+          // reflects the current state immediately.
+          setNarrationEnabled(action.enabled)
+          chrome.storage.local.set({ narration: action.enabled })
+          if (action.enabled) {
+            // Speak a short confirmation so the user knows narration is active.
+            speak('Narración activada')
+          } else {
+            // Stop any ongoing speech immediately when narration is turned off.
+            window.speechSynthesis.cancel()
+          }
+          break
+        }
       }
     },
     [closeInstance],

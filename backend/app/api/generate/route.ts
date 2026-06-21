@@ -294,23 +294,28 @@ If a tool fails or returns nothing, render the best answer you can. For create r
   // Tracks whether the model called control_widgets (management intent).
   let controlToolUse: Anthropic.ToolUseBlock | null = null
 
-  // The control_widgets tool — allows the model to close/move/clear existing widgets.
+  // The control_widgets tool — allows the model to close/move/clear existing widgets,
+  // or toggle voice narration on or off.
   const CONTROL_WIDGETS_TOOL: Anthropic.Tool = {
     name: 'control_widgets',
     description:
-      'Manage existing on-screen widget instances. ' +
+      'Manage existing on-screen widget instances, or toggle voice narration. ' +
       'Use this when the user wants to CLOSE, MOVE, or CLEAR widgets — not to create new ones. ' +
+      'Also use this when the user wants to turn voice narration / reading-aloud ON or OFF ' +
+      '(e.g. "activa la narración", "lee en voz alta", "narra el partido", "turn on narration", ' +
+      '"deja de leer", "apaga la narración", "turn off narration", "stop reading"). ' +
       'Reference widget ids from the "Currently on screen" list in the instruction text.',
     input_schema: {
       type: 'object' as const,
       properties: {
         action: {
           type: 'string',
-          enum: ['close', 'move', 'clear_all'],
+          enum: ['close', 'move', 'clear_all', 'narration'],
           description:
             'close = remove specific widget(s) by id; ' +
             'move = reposition one widget to a different slot; ' +
-            'clear_all = remove every widget on screen.',
+            'clear_all = remove every widget on screen; ' +
+            'narration = toggle voice narration on or off (use the enabled field).',
         },
         targetIds: {
           type: 'array',
@@ -329,6 +334,10 @@ If a tool fails or returns nothing, render the best answer you can. For create r
             'bottom-left', 'bottom-center', 'bottom-right',
           ],
           description: '[move only] The destination slot.',
+        },
+        enabled: {
+          type: 'boolean',
+          description: '[narration only] true = turn narration on; false = turn narration off.',
         },
       },
       required: ['action'],
@@ -590,6 +599,7 @@ If a tool fails or returns nothing, render the best answer you can. For create r
       targetIds?: string[]
       targetId?: string
       slot?: string
+      enabled?: boolean
     }
 
     let controlCandidate: unknown
@@ -602,6 +612,9 @@ If a tool fails or returns nothing, render the best answer you can. For create r
         break
       case 'clear_all':
         controlCandidate = { kind: 'control', action: 'clear_all' }
+        break
+      case 'narration':
+        controlCandidate = { kind: 'control', action: 'narration', enabled: raw.enabled ?? false }
         break
       default:
         return Response.json(

@@ -169,6 +169,12 @@ export const ControlActionSchema = z.discriminatedUnion('action', [
     kind: z.literal('control'),
     action: z.literal('clear_all'),
   }),
+  // Toggle voice narration (text-to-speech) on or off.
+  z.object({
+    kind: z.literal('control'),
+    action: z.literal('narration'),
+    enabled: z.boolean(),
+  }),
 ])
 
 export type ControlAction = z.infer<typeof ControlActionSchema>
