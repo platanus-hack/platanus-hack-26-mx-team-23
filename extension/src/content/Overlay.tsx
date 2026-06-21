@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { AnimatePresence, motion, useMotionValue } from 'framer-motion'
+import klaiIdle from '../assets/klai-idle.png'
+import klaiThinking from '../assets/klai-thinking.jpg'
+// klai-done.jpg reserved for a future 'done' voice state
+import _klaiDone from '../assets/klai-done.jpg'
 import {
   ResponseSchema,
   ControlActionSchema,
@@ -358,6 +362,30 @@ const ALERT_COOLDOWN_MS = 45_000
 // Module-level cooldown tracker: alert widgetSignature → timestamp of auto-close.
 // Checked in the proactive accumulate path before adding a new alert instance.
 const recentlyAutoClosedAlerts = new Map<string, number>()
+
+// ---------------------------------------------------------------------------
+// Generic card auto-expire (~60 s for any non-alert widget, manual or proactive).
+//
+// Every non-alert widget instance gets a stale timer. The timer is RESET
+// whenever the instance's data is updated in place (accumulateLayout update path).
+// On expiry the instance is removed as an AUTO dismissal (userInitiated=false)
+// so it does NOT pollute dismissedAutoTypes.
+//
+// Proactive instances that expire are entered in recentlyAutoClosedCards
+// (widgetSignature → timestamp) so the watch loop cannot immediately re-add them
+// (same pattern as recentlyAutoClosedAlerts). Manual instances expire with no
+// cooldown — the user can just ask again.
+//
+// The fill-the-gap AUTO scoreboard (tracked by autoScoreboardInstanceId) is
+// EXEMPT from this timer — it is managed by klai:score-state lifecycle events
+// and must not be double-managed.
+// ---------------------------------------------------------------------------
+const GENERIC_AUTO_DISMISS_MS = 60_000
+const GENERIC_CARD_COOLDOWN_MS = 45_000
+
+// Module-level cooldown tracker for proactive non-alert cards.
+// widgetSignature → timestamp of auto-expiry.
+const recentlyAutoClosedCards = new Map<string, number>()
 
 // ---------------------------------------------------------------------------
 // Dismissed proactive widget signatures — module-level (per content-script
@@ -886,11 +914,20 @@ export function Overlay() {
   // Keyed by instance id. Timers are cleared on closeInstance, unmount, and Clear all.
   const alertTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
+  // Per-instance generic stale timers for ALL non-alert widget instances.
+  // Keyed by instance id. Timers are reset whenever the instance is updated in place.
+  // Cleared on closeInstance, unmount, and Clear all.
+  const genericTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
   // Scratch list populated inside the accumulateLayout setInstances updater so we
   // can schedule timers after the updater returns (timers must not be started inside
   // the updater itself because React may call updaters more than once in strict mode).
   // Each entry: { id, sig, reset } where reset=true means cancel the old timer first.
   const pendingAlertTimerOpsRef = useRef<Array<{ id: string; sig: string; reset: boolean }>>([])
+
+  // Scratch list for generic (non-alert) card timers, same pattern as above.
+  // Each entry: { id, sig, proactive, reset }
+  const pendingGenericTimerOpsRef = useRef<Array<{ id: string; sig: string; proactive: boolean; reset: boolean }>>([])
 
   // Schedule (or reset) the auto-dismiss timer for a proactive alert instance.
   // Called right after accumulateLayout's setInstances call drains pendingAlertTimerOpsRef.
@@ -920,6 +957,35 @@ export function Overlay() {
     alertTimersRef.current.set(id, timer)
   }, [])
 
+  // Schedule (or reset) the 60-second stale timer for a non-alert widget instance.
+  // proactive=true → on expiry, enter the signature in recentlyAutoClosedCards cooldown.
+  // proactive=false → expire silently with no cooldown (user can ask again).
+  const scheduleGenericTimer = useCallback((id: string, sig: string, proactive: boolean, reset: boolean) => {
+    if (reset) {
+      const existing = genericTimersRef.current.get(id)
+      if (existing !== undefined) {
+        clearTimeout(existing)
+        genericTimersRef.current.delete(id)
+      }
+    }
+    const timer = setTimeout(() => {
+      genericTimersRef.current.delete(id)
+      if (proactive) {
+        // Record cooldown so the watch loop cannot immediately re-add the same card.
+        recentlyAutoClosedCards.set(sig, Date.now())
+      }
+      // Auto-expiry: NOT user-initiated — never adds to dismissedAutoTypes.
+      setInstances((prev) => prev.filter((i) => i.id !== id))
+      setRevealedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      measureRefs.current.delete(id)
+    }, GENERIC_AUTO_DISMISS_MS)
+    genericTimersRef.current.set(id, timer)
+  }, [])
+
   // Keep videoRect in sync with the page <video> element.
   useEffect(() => {
     function findVideo() {
@@ -947,8 +1013,9 @@ export function Overlay() {
   // ---------------------------------------------------------------------------
   const accumulateLayout = useCallback(
     (layout: Layout, proactive: boolean) => {
-      // Reset the scratch list before each call so we start clean.
+      // Reset the scratch lists before each call so we start clean.
       pendingAlertTimerOpsRef.current = []
+      pendingGenericTimerOpsRef.current = []
 
       setInstances((prev) => {
         const next = [...prev]
@@ -981,13 +1048,14 @@ export function Overlay() {
                 widget: node.widget,
                 zIndex: node.zIndex ?? 10,
               }
+              const updatedId = next[existingProactiveIdx].id
               // If this is a proactive alert, reset its auto-dismiss timer (new message → 15s restart).
               if (widgetType === 'alert') {
-                pendingAlertTimerOpsRef.current.push({
-                  id: next[existingProactiveIdx].id,
-                  sig,
-                  reset: true,
-                })
+                pendingAlertTimerOpsRef.current.push({ id: updatedId, sig, reset: true })
+              } else {
+                // Non-alert update in place → reset the 60-second stale timer so an
+                // actively-updating card (e.g. live scoreboard) never expires while in use.
+                pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: true, reset: true })
               }
               continue
             }
@@ -1002,13 +1070,18 @@ export function Overlay() {
             // 4. Also skip the per-signature dismissed set (backwards compat).
             if (dismissedSignatures.has(sig)) continue
 
-            // 5. Cooldown check for proactive alerts: if this exact alert signature
-            //    was auto-closed within ALERT_COOLDOWN_MS, skip it so the watch loop
-            //    cannot immediately re-add the just-dismissed alert (no flicker).
-            //    A DIFFERENT alert message has a different signature and is not blocked.
+            // 5a. Cooldown check for proactive alerts: if this exact alert signature
+            //     was auto-closed within ALERT_COOLDOWN_MS, skip it.
             if (widgetType === 'alert') {
               const closedAt = recentlyAutoClosedAlerts.get(sig)
               if (closedAt !== undefined && Date.now() - closedAt < ALERT_COOLDOWN_MS) continue
+            }
+
+            // 5b. Cooldown check for non-alert proactive cards: if this card's
+            //     signature was auto-expired within GENERIC_CARD_COOLDOWN_MS, skip it.
+            if (widgetType !== 'alert') {
+              const closedAt = recentlyAutoClosedCards.get(sig)
+              if (closedAt !== undefined && Date.now() - closedAt < GENERIC_CARD_COOLDOWN_MS) continue
             }
 
             // 6. No existing instance of this type — ADD as new proactive instance.
@@ -1042,6 +1115,11 @@ export function Overlay() {
             if (node.widget.type === 'scoreboard') {
               const [h, a] = node.widget.teams
               lastKnownScore = { home: h, away: a, minute: node.widget.minute }
+            }
+            // Reset the generic stale timer for any updated non-alert manual widget.
+            const updatedId = next[existingIdx].id
+            if (node.widget.type !== 'alert') {
+              pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: false, reset: true })
             }
           } else {
             // ADD as new instance.
@@ -1086,6 +1164,16 @@ export function Overlay() {
             // Manual alerts (proactive=false) are user-requested and must not auto-close.
             if (proactive && widgetType === 'alert') {
               pendingAlertTimerOpsRef.current.push({ id, sig, reset: false })
+            }
+
+            // Schedule 60-second stale timer for ALL new non-alert widget instances.
+            // Alerts keep their own ALERT_AUTO_DISMISS_MS and are not doubled here.
+            // The AUTO scoreboard (tracked by autoScoreboardInstanceId) is identified
+            // AFTER this updater returns, so we schedule the timer unconditionally here;
+            // scheduleGenericTimer will be a no-op for the auto scoreboard because we
+            // cancel it in the post-updater step if the id matches autoScoreboardInstanceId.
+            if (widgetType !== 'alert') {
+              pendingGenericTimerOpsRef.current.push({ id, sig, proactive, reset: false })
             }
           }
         }
@@ -1136,8 +1224,16 @@ export function Overlay() {
         scheduleAlertTimer(op.id, op.sig, op.reset)
       }
       pendingAlertTimerOpsRef.current = []
+
+      // Schedule generic stale timers for non-alert widgets.
+      // EXEMPT the fill-the-gap AUTO scoreboard — it is managed by klai:score-state.
+      for (const op of pendingGenericTimerOpsRef.current) {
+        if (op.id === autoScoreboardInstanceId) continue
+        scheduleGenericTimer(op.id, op.sig, op.proactive, op.reset)
+      }
+      pendingGenericTimerOpsRef.current = []
     },
-    [scheduleAlertTimer],
+    [scheduleAlertTimer, scheduleGenericTimer],
   )
 
   // Close a single widget instance by ID.
@@ -1157,6 +1253,12 @@ export function Overlay() {
     if (existingTimer !== undefined) {
       clearTimeout(existingTimer)
       alertTimersRef.current.delete(id)
+    }
+    // Clear any pending generic stale timer for this instance.
+    const existingGenericTimer = genericTimersRef.current.get(id)
+    if (existingGenericTimer !== undefined) {
+      clearTimeout(existingGenericTimer)
+      genericTimersRef.current.delete(id)
     }
 
     setInstances((prev) => {
@@ -1266,6 +1368,12 @@ export function Overlay() {
           }
           alertTimersRef.current.clear()
           recentlyAutoClosedAlerts.clear()
+          // Clear all generic stale timers and the proactive card cooldown map.
+          for (const timer of genericTimersRef.current.values()) {
+            clearTimeout(timer)
+          }
+          genericTimersRef.current.clear()
+          recentlyAutoClosedCards.clear()
           break
         }
       }
@@ -1412,6 +1520,12 @@ export function Overlay() {
             return next
           })
           measureRefs.current.delete(idToRemove)
+          // Clear any generic stale timer that may have been attached to this instance.
+          const existingGenericTimer = genericTimersRef.current.get(idToRemove)
+          if (existingGenericTimer !== undefined) {
+            clearTimeout(existingGenericTimer)
+            genericTimersRef.current.delete(idToRemove)
+          }
         }
         return
       }
@@ -1559,6 +1673,11 @@ export function Overlay() {
         clearTimeout(timer)
       }
       alertTimersRef.current.clear()
+      // Clear all pending generic stale timers.
+      for (const timer of genericTimersRef.current.values()) {
+        clearTimeout(timer)
+      }
+      genericTimersRef.current.clear()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1636,6 +1755,9 @@ export function Overlay() {
 
   // "Clear all" control — only shown when 2+ widgets are present.
   const showClearAll = instances.length >= 2
+
+  // Floating mascot button — hover state for tooltip.
+  const [mascotHovered, setMascotHovered] = useState(false)
 
   return (
     <div style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'relative' }}>
@@ -1854,6 +1976,12 @@ export function Overlay() {
               }
               alertTimersRef.current.clear()
               recentlyAutoClosedAlerts.clear()
+              // Clear all generic stale timers and the proactive card cooldown map.
+              for (const timer of genericTimersRef.current.values()) {
+                clearTimeout(timer)
+              }
+              genericTimersRef.current.clear()
+              recentlyAutoClosedCards.clear()
             }}
             style={{
               position: 'fixed',
@@ -1896,6 +2024,198 @@ export function Overlay() {
           </motion.button>
         )}
       </AnimatePresence>
+
+      {/*
+        Floating mascot button — anchored to the right edge of the video rect,
+        vertically centered. Shows the REAL Klai mascot image, swapping by voice state:
+          idle        → klai-idle.png, breathing float animation
+          listening   → klai-idle.png + red pulsing ring + bounce
+          transcribing → klai-thinking.jpg + purple pulsing ring + wobble
+
+        Asset approach: ES module imports (klaiIdle / klaiThinking / klaiDone).
+        CRXJS auto-registers imported assets from content-script modules into
+        web_accessible_resources and rewrites the import to a chrome-extension://
+        URL. This means the <img src={klaiIdle}> resolves correctly on any host
+        page (youtube.com, etc.) with zero manual manifest changes.
+
+        Click path: chrome.runtime.sendMessage({ type: 'POPUP_START_RECORDING' })
+        — identical to the popup mic button. Guarded against double-trigger while
+        already listening or transcribing.
+      */}
+      <div
+        style={{
+          position: 'fixed',
+          right: window.innerWidth - effectiveRect.right + SLOT_PADDING,
+          top: effectiveRect.top + effectiveRect.height / 2,
+          transform: 'translateY(-50%)',
+          zIndex: 2147483646,
+          pointerEvents: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 0,
+        }}
+        onMouseEnter={() => setMascotHovered(true)}
+        onMouseLeave={() => setMascotHovered(false)}
+      >
+        {/* Tooltip — slides in from the right on hover */}
+        <AnimatePresence>
+          {mascotHovered && (
+            <motion.div
+              key="klai-mascot-tooltip"
+              initial={{ opacity: 0, x: 6 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 6 }}
+              transition={{ duration: 0.15 }}
+              style={{
+                position: 'absolute',
+                right: '100%',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                marginRight: 10,
+                background: 'rgba(10,10,14,0.85)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 8,
+                padding: '5px 10px',
+                color: '#fff',
+                fontSize: 12,
+                fontFamily: 'system-ui, sans-serif',
+                fontWeight: 500,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                letterSpacing: '0.01em',
+              }}
+            >
+              Ask Klai
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/*
+          Mascot button — 64px circular frame with glassmorphism.
+          Idle: gentle breathing float loop.
+          Listening: bounce + red pulsing ring.
+          Transcribing: wobble + purple pulsing ring.
+          Hover: scale up slightly (handled by whileHover).
+        */}
+        <motion.button
+          aria-label="Ask Klai — voice input"
+          disabled={voiceState !== 'idle'}
+          onClick={() => {
+            if (voiceState !== 'idle') return
+            chrome.runtime.sendMessage({ type: 'POPUP_START_RECORDING' })
+          }}
+          // Idle: subtle breathing float. Listening: bounce. Transcribing: wobble.
+          animate={
+            voiceState === 'listening'
+              ? { scale: [1, 1.1, 1], y: [0, -4, 0] }
+              : voiceState === 'transcribing'
+              ? { rotate: [-3, 3, -3], scale: [1, 1.04, 1] }
+              : { scale: [1, 1.04, 1], y: [0, -3, 0] }
+          }
+          transition={
+            voiceState === 'listening'
+              ? { duration: 0.75, repeat: Infinity, ease: 'easeInOut' }
+              : voiceState === 'transcribing'
+              ? { duration: 1.0, repeat: Infinity, ease: 'easeInOut' }
+              : { duration: 3.0, repeat: Infinity, ease: 'easeInOut' }
+          }
+          whileHover={voiceState === 'idle' ? { scale: 1.14 } : {}}
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: '50%',
+            // Border color by state: idle=purple, listening=red, transcribing=white
+            border: voiceState === 'listening'
+              ? '2.5px solid rgba(239,68,68,0.9)'
+              : voiceState === 'transcribing'
+              ? '2.5px solid rgba(139,127,255,0.7)'
+              : '2px solid rgba(139,127,255,0.45)',
+            background: 'rgba(10,10,18,0.55)',
+            backdropFilter: 'blur(14px)',
+            WebkitBackdropFilter: 'blur(14px)',
+            boxShadow: voiceState === 'listening'
+              ? '0 0 22px rgba(239,68,68,0.55), 0 4px 16px rgba(0,0,0,0.6)'
+              : voiceState === 'transcribing'
+              ? '0 0 22px rgba(139,127,255,0.5), 0 4px 16px rgba(0,0,0,0.6)'
+              : '0 0 18px rgba(139,127,255,0.4), 0 4px 12px rgba(0,0,0,0.55)',
+            cursor: voiceState === 'idle' ? 'pointer' : 'default',
+            padding: 0,
+            pointerEvents: 'auto',
+            position: 'relative',
+            overflow: 'visible',
+            // Drop shadow for the outer glow / premium look
+            filter: voiceState === 'idle'
+              ? 'drop-shadow(0 0 10px rgba(139,127,255,0.45))'
+              : voiceState === 'listening'
+              ? 'drop-shadow(0 0 14px rgba(239,68,68,0.6))'
+              : 'drop-shadow(0 0 14px rgba(139,127,255,0.55))',
+          }}
+        >
+          {/* Outer pulsing ring — listening (red) or transcribing (purple), not idle */}
+          {voiceState !== 'idle' && (
+            <motion.span
+              animate={{ scale: [1, 1.6, 1], opacity: [0.7, 0, 0.7] }}
+              transition={{ duration: 1.1, repeat: Infinity, ease: 'easeOut' }}
+              style={{
+                position: 'absolute',
+                inset: -8,
+                borderRadius: '50%',
+                border: voiceState === 'listening'
+                  ? '2px solid rgba(239,68,68,0.75)'
+                  : '2px solid rgba(139,127,255,0.65)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+
+          {/* Second, slightly delayed ring for listening — extra visual punch */}
+          {voiceState === 'listening' && (
+            <motion.span
+              animate={{ scale: [1, 1.9, 1], opacity: [0.4, 0, 0.4] }}
+              transition={{ duration: 1.1, repeat: Infinity, ease: 'easeOut', delay: 0.35 }}
+              style={{
+                position: 'absolute',
+                inset: -8,
+                borderRadius: '50%',
+                border: '1.5px solid rgba(239,68,68,0.45)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+
+          {/*
+            Mascot image — circular crop via border-radius + object-fit: cover.
+            Crossfades between states using AnimatePresence.
+              idle / listening → klai-idle.png (listening uses the idle image + the ring)
+              transcribing     → klai-thinking.jpg
+          */}
+          <AnimatePresence mode="sync">
+            <motion.img
+              key={voiceState === 'transcribing' ? 'thinking' : 'idle'}
+              src={voiceState === 'transcribing' ? klaiThinking : klaiIdle}
+              alt={voiceState === 'transcribing' ? 'Klai thinking' : 'Klai'}
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.18 } }}
+              transition={{ duration: 0.28, ease: [0.165, 0.84, 0.44, 1] }}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                borderRadius: '50%',
+                objectFit: 'cover',
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
+              draggable={false}
+            />
+          </AnimatePresence>
+        </motion.button>
+      </div>
 
       {/*
         Hidden measurement layer — ALL instances rendered at opacity:0,
