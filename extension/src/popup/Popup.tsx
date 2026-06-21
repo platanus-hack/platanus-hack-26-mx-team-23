@@ -50,7 +50,7 @@ function statusToPhase(status: Status, intro: 'idle' | 'thinking' | 'done'): 'id
   if (intro !== 'done') return intro
   if (status === 'sending') return 'thinking'
   if (status === 'done') return 'done'
-  return 'idle'
+  return 'done'
 }
 
 function statusLabel(status: Status): string {
