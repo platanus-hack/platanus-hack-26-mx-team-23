@@ -165,7 +165,15 @@ Available slots: top-left, top-center, top-right, middle-left, middle-right, bot
 - Wide widgets need at least ~300px. top-center and top-right are adjacent — using both for wide widgets causes overlap.
 - Prefer non-adjacent slots for multi-widget layouts: e.g. top-left + bottom-right, or top-center + bottom-left.
 
-STEP 5 — Use ONLY data visible in the screenshot for the primary content. Do not use prior knowledge.
+STEP 4.5 — For SPORT MATCHES: read the two team names off the scorebug, then call get_sports_data with
+those names in \`teams\` and the \`want\` section(s) matching the user's question, for ANY data not directly
+visible on screen — cards, referee, venue, lineups, detailed stats, standings, recent form, odds, news.
+(want mapping: score/who's winning→["score"]; stats/possession/cards→["stats"]; goals→["events"];
+referee/stadium/TV→["info"]; top scorer→["leaders"]; lineups/formation→["lineups"]; group table→["standings"];
+record→["record"]; form/h2h→["form"]; odds→["odds"]; news→["news"].) TRUST the tool's score/stats over the image.
+
+STEP 5 — Use ONLY data visible in the screenshot OR returned by get_sports_data. Do not use prior knowledge
+and do not invent scores, stats, names, or events — omit uncertain fields.
 
 The user said: "${text}".
 Compose the best layout for this intent. For broad requests like "summarize this" or "full overview",
@@ -240,10 +248,17 @@ Call render_layout with the best matching layout.`
   // System guidance for the agent loop: research with web_research when the answer
   // isn't on screen, then finish with render_layout.
   const GENERATE_SYSTEM = `You are Klai, a generative overlay assistant for live video.
-You have two tools:
-- web_research: look up REAL facts you cannot get from the screenshot — a person/player identity, current news, real statistics, definitions, prices. Use it when the request needs outside knowledge. You may call it more than once; prefer one focused query.
+You have three tools:
+- get_sports_data: PRIMARY source for the live FIFA World Cup match shown on screen. Use it FIRST for any football/soccer question. It covers score, stats, goals/cards, referee/venue/TV, match leaders, lineups/formations, group standings, tournament record, recent form/head-to-head, betting odds, and news. Pass the two team names you read from the on-screen scorebug in \`teams\` (order/abbreviations don't matter; if you can't read them, call it with no teams to resolve the only live game). Pass \`want\` as an array of the section(s) the user asked for — e.g. ["score"], ["stats"], ["info"] for referee/venue, ["lineups"], ["standings"], ["form"], ["odds"], ["news"], or ["score","info"] for combined; request ONLY what's needed, omit \`want\` for a quick overview. Map results into scoreboard/statpanel/alert/infocard/keypoints widgets, and TRUST its score/stats over what you read from the image.
+- web_research: fallback for facts get_sports_data can't provide — non-World-Cup sports, player bios, current news, definitions, prices, general knowledge. Prefer one focused query.
 - render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step.
-Policy: for data visible on screen (live score, on-screen text) read the screenshot; for facts NOT on screen, call web_research first, then render_layout. If a tool fails or returns nothing, render the best answer you can. Always finish by calling render_layout.`
+Policy:
+1. If the screen shows a live football/soccer match, call get_sports_data with the team names from the scorebug BEFORE anything else, passing the \`want\` section(s) that match the user's question.
+2. When the user asks about something beyond the on-screen scorebug — referee, lineups, detailed stats, standings, form, odds, news — call get_sports_data with the matching \`want\` section(s).
+3. If get_sports_data returns no match (or the topic is non-World-Cup / a non-sports fact), use web_research.
+4. For purely on-screen, non-factual content, you may skip the data tools.
+5. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
+If a tool fails or returns nothing, render the best answer you can. Always finish by calling render_layout.`
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
   const MAX_ROUNDS = 5
