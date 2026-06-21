@@ -310,6 +310,25 @@ function layoutSignature(layout: Layout): string {
 }
 
 // ---------------------------------------------------------------------------
+// Dismissed proactive widget signatures — module-level (per content-script
+// lifetime, i.e. per tab).
+//
+// When the user manually closes a proactive widget, its widgetSignature is
+// added here. The proactive suggestion handler checks this set and skips
+// any incoming node whose signature matches — preventing watch-mode from
+// re-opening cards the user dismissed.
+//
+// The manual query path does NOT check this set; the user explicitly asked,
+// so the widget always appears. When a manual query adds/updates a widget,
+// its signature is REMOVED from this set so future proactive updates can
+// surface it again.
+//
+// "Clear all": clears this set too — the user gets a clean slate and watch
+// mode can resume surfacing everything.
+// ---------------------------------------------------------------------------
+const dismissedSignatures = new Set<string>()
+
+// ---------------------------------------------------------------------------
 // Widget instance model — the live list of active widgets.
 // Replaces the single-layout OverlayState.
 // ---------------------------------------------------------------------------
@@ -348,6 +367,19 @@ interface WidgetInstance {
    * MAX_INSTANCES.
    */
   insertionOrder: number
+  /**
+   * The slot assigned to this instance by the overlap resolver.
+   * Null means the resolver has not yet placed this instance.
+   * Once set, this instance is treated as a FIXED OBSTACLE by subsequent
+   * resolver runs — it will not be relocated when new widgets are added.
+   */
+  placedSlot: Slot | null
+  /**
+   * The vertical offset (px) assigned to this instance by the overlap resolver
+   * (used when stacking within the same slot). Zero means no stacking offset.
+   * Only valid when placedSlot is non-null.
+   */
+  placedOffsetY: number
 }
 
 // ---------------------------------------------------------------------------
@@ -395,30 +427,35 @@ function deduplicateSlotsForInstances(
 ): WidgetInstance[] {
   const noGo = centerNoGoZone(videoRect)
 
-  // Dragged widgets are fixed — their slots are pre-occupied obstacles.
+  // Fixed = dragged (manualPos !== null) OR already resolver-placed (placedSlot !== null).
+  // Fixed instances occupy their slots and are never relocated.
+  const isFixed = (i: WidgetInstance) => i.manualPos !== null || i.placedSlot !== null
+
   const fixedSlots = new Set<Slot>(
-    instances.filter((i) => i.manualPos !== null).map((i) => i.slot),
+    instances.filter(isFixed).map((i) => (i.placedSlot ?? i.slot) as Slot),
   )
 
   const slotMap = new Map<Slot, WidgetInstance>()
-  // Pre-populate fixed instances.
+  // Pre-populate fixed instances using their effective slot.
   for (const inst of instances) {
-    if (inst.manualPos !== null) {
-      slotMap.set(inst.slot, inst)
+    if (isFixed(inst)) {
+      const effectiveSlot = (inst.placedSlot ?? inst.slot) as Slot
+      slotMap.set(effectiveSlot, inst)
     }
   }
 
-  // Sort non-dragged instances by priority descending so higher-priority nodes
-  // claim their slot first.
+  // Sort non-fixed (unplaced, non-dragged) instances by priority descending so
+  // higher-priority nodes claim their desired slot first.
   const nonFixed = instances
-    .filter((i) => i.manualPos === null)
+    .filter((i) => !isFixed(i))
     .sort((a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type))
 
-  const result: WidgetInstance[] = [...instances.filter((i) => i.manualPos !== null)]
+  const result: WidgetInstance[] = [...instances.filter(isFixed)]
 
   for (const inst of nonFixed) {
-    if (!slotMap.has(inst.slot) && !fixedSlots.has(inst.slot)) {
-      slotMap.set(inst.slot, inst)
+    const targetSlot = inst.slot
+    if (!slotMap.has(targetSlot) && !fixedSlots.has(targetSlot)) {
+      slotMap.set(targetSlot, inst)
       result.push(inst)
     } else {
       // Slot occupied — find the nearest free, non-center-colliding slot.
@@ -446,8 +483,13 @@ function deduplicateSlotsForInstances(
 
 // ---------------------------------------------------------------------------
 // Overlap resolution (post-measure pass) across all active instances.
-// Dragged instances (manualPos set) are fixed — not relocated but treated as
-// obstacles for new widgets.
+//
+// Fixed instances (dragged OR already placed by a previous resolver run) are
+// treated as immovable obstacles. Only instances that have never been placed
+// (placedSlot === null AND manualPos === null) are newly positioned.
+//
+// This ensures that adding or closing a widget never relocates widgets that
+// are already on screen — only brand-new widgets get positioned.
 //
 // With the motion-value drag model, each dragged widget's actual viewport
 // position is: slotAnchor(top/left) + dragOffset(x/y). The measuredRect from
@@ -461,17 +503,20 @@ function resolveOverlapsForInstances(
 ): PlacementMap {
   const noGo = centerNoGoZone(videoRect)
 
-  // Place fixed (dragged) instances first — they are obstacles at their actual
-  // visual position (slot anchor + drag offset).
   const placed: Array<{ id: string; slot: Slot; rect: DOMRect; offsetY: number }> = []
   const result: PlacementMap = new Map()
 
+  // --- Pass 1: register all FIXED instances as obstacles ---
+  // Fixed = dragged (manualPos !== null) OR already resolved in a prior run
+  // (placedSlot !== null). Their position never changes.
   for (const inst of instances) {
-    if (inst.manualPos !== null) {
+    const isDragged = inst.manualPos !== null
+    const isPlaced = inst.placedSlot !== null
+
+    if (isDragged) {
       const measuredRect = measuredRects.get(inst.id)
       if (measuredRect) {
-        // Compute actual on-screen position: slot anchor rect shifted by the
-        // drag offset (stored in dragOffset, with manualPos as the sentinel).
+        // Actual on-screen position: slot anchor + drag offset.
         const offset = inst.dragOffset ?? { x: 0, y: 0 }
         const rect = new DOMRect(
           measuredRect.x + offset.x,
@@ -484,15 +529,26 @@ function resolveOverlapsForInstances(
       } else {
         result.set(inst.id, { slot: inst.slot, offsetY: 0 })
       }
+    } else if (isPlaced) {
+      // Already resolver-placed: lock in at the stored slot + offsetY.
+      const slot = inst.placedSlot as Slot
+      const offsetY = inst.placedOffsetY
+      const measuredRect = measuredRects.get(inst.id)
+      if (measuredRect) {
+        const rect = estimateSlotRect(slot, videoRect, measuredRect.width, measuredRect.height)
+        placed.push({ id: inst.id, slot, rect, offsetY })
+      }
+      result.set(inst.id, { slot, offsetY })
     }
   }
 
-  // Sort non-dragged instances by priority descending.
-  const nonFixed = instances
-    .filter((i) => i.manualPos === null)
+  // --- Pass 2: position only UNPLACED, non-dragged instances ---
+  // These are widgets that were just added and have not been placed yet.
+  const unplaced = instances
+    .filter((i) => i.manualPos === null && i.placedSlot === null)
     .sort((a, b) => widgetPriority(b.widget.type) - widgetPriority(a.widget.type))
 
-  for (const inst of nonFixed) {
+  for (const inst of unplaced) {
     const measuredRect = measuredRects.get(inst.id)
 
     if (!measuredRect) {
@@ -797,11 +853,20 @@ export function Overlay() {
         for (const node of layout.nodes) {
           const sig = widgetSignature(node)
 
+          // Proactive path: skip widgets the user explicitly dismissed.
+          // Manual path: re-enable dismissed signatures so future proactive
+          // updates can surface them again.
+          if (proactive) {
+            if (dismissedSignatures.has(sig)) continue
+          } else {
+            dismissedSignatures.delete(sig)
+          }
+
           // Check for existing instance with same signature.
           const existingIdx = next.findIndex((i) => widgetSignature({ widget: i.widget, slot: i.slot, zIndex: i.zIndex }) === sig)
 
           if (existingIdx !== -1) {
-            // UPDATE in place — preserve id, slot, manualPos.
+            // UPDATE in place — preserve id, slot, manualPos, and placed position.
             next[existingIdx] = {
               ...next[existingIdx],
               widget: node.widget,
@@ -833,6 +898,10 @@ export function Overlay() {
               dragOffset: null,
               proactive,
               insertionOrder: instanceCounter,
+              // New instances start unplaced — resolver will position them on next
+              // measure pass and then lock them in via placedSlot/placedOffsetY.
+              placedSlot: null,
+              placedOffsetY: 0,
             })
             newIds.push(id)
           }
@@ -881,8 +950,22 @@ export function Overlay() {
   )
 
   // Close a single widget instance by ID.
-  const closeInstance = useCallback((id: string) => {
-    setInstances((prev) => prev.filter((i) => i.id !== id))
+  // userInitiated=true (default) means the USER clicked the close button —
+  // the widget's signature is added to dismissedSignatures so watch mode
+  // cannot re-open it. userInitiated=false is used by the 12-second
+  // auto-dismiss timer — the user never asked to suppress it, so we do NOT
+  // add it to dismissedSignatures.
+  const closeInstance = useCallback((id: string, userInitiated = true) => {
+    setInstances((prev) => {
+      if (userInitiated) {
+        const inst = prev.find((i) => i.id === id)
+        if (inst) {
+          const sig = widgetSignature({ widget: inst.widget, slot: inst.slot, zIndex: inst.zIndex })
+          dismissedSignatures.add(sig)
+        }
+      }
+      return prev.filter((i) => i.id !== id)
+    })
     setRevealedIds((prev) => {
       const next = new Set(prev)
       next.delete(id)
@@ -1004,7 +1087,9 @@ export function Overlay() {
       clearSuggestionTimer()
 
       // Auto-dismiss proactive widgets after SUGGESTION_AUTO_DISMISS_MS.
-      // Find the IDs that will be added and dismiss them when the timer fires.
+      // This is a timer-driven dismiss (NOT user-initiated), so dismissed
+      // signatures are NOT added to dismissedSignatures — watch mode can
+      // surface these cards again on the next detection cycle.
       const incomingSigs = new Set(normalized.nodes.map((n) => widgetSignature(n)))
       suggestionDismissTimerRef.current = setTimeout(() => {
         lastSuggestionSignatureRef.current = ''
@@ -1020,6 +1105,7 @@ export function Overlay() {
             return next
           })
           toRemove.forEach((id) => measureRefs.current.delete(id))
+          // Auto-dismiss: do NOT add signatures to dismissedSignatures.
           return prev.filter((i) => !toRemove.includes(i.id))
         })
       }, SUGGESTION_AUTO_DISMISS_MS)
@@ -1094,6 +1180,22 @@ export function Overlay() {
 
     const resolved = resolveOverlapsForInstances(deduplicatedInstances, measuredRects, effectiveRect)
     setPlacements(resolved)
+
+    // Persist resolved placements onto newly-placed instances so they become
+    // fixed obstacles in subsequent resolver runs. Existing instances whose
+    // placedSlot is already set are not touched — their position is locked.
+    setInstances((prev) => {
+      let changed = false
+      const next = prev.map((inst) => {
+        // Skip dragged (manualPos handles them) and already-placed instances.
+        if (inst.manualPos !== null || inst.placedSlot !== null) return inst
+        const placement = resolved.get(inst.id)
+        if (!placement) return inst
+        changed = true
+        return { ...inst, placedSlot: placement.slot, placedOffsetY: placement.offsetY }
+      })
+      return changed ? next : prev
+    })
   })
 
   // Whether any proactive widget is currently in the instance list.
@@ -1307,6 +1409,11 @@ export function Overlay() {
               measureRefs.current.clear()
               lastNodeFingerprintRef.current = ''
               setPlacements(new Map())
+              // Clear dismissed signatures so watch mode can resurface
+              // everything from a clean slate after "Clear all".
+              dismissedSignatures.clear()
+              lastSuggestionSignatureRef.current = ''
+              clearSuggestionTimer()
             }}
             style={{
               position: 'fixed',
