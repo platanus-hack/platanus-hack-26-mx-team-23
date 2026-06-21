@@ -1,0 +1,115 @@
+/* Wrapper fijo — centra sin interferir con el transform de Motion */
+.navWrap {
+  position: fixed;
+  top: 16px;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Nav pill */
+.nav {
+  pointer-events: auto;
+  width: calc(100% - 48px);
+  max-width: 860px;
+  padding: 0;
+  border-radius: 16px;
+  background: rgba(8, 6, 15, 0.55);
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 16px;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.logoImg {
+  height: 28px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Nav links */
+.links {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  justify-content: center;
+}
+
+.link {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.65);
+  transition: color 0.15s ease;
+}
+
+.link:hover {
+  color: #ffffff;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 20px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: opacity 0.15s ease;
+  white-space: nowrap;
+}
+
+.cta:hover {
+  opacity: 0.82;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .navWrap {
+    top: 12px;
+  }
+
+  .nav {
+    width: calc(100% - 32px);
+  }
+
+  .links {
+    display: none;
+  }
+
+  .inner {
+    justify-content: space-between;
+  }
+}

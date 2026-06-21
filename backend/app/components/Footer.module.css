@@ -1,0 +1,102 @@
+.footer {
+  padding-top: 80px;
+  padding-bottom: 32px;
+  border-top: 1px solid var(--klai-divider);
+}
+
+.inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 48px;
+  margin-bottom: 48px;
+}
+
+/* Logo */
+.left {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.logoImg {
+  height: 30px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.tagline {
+  font-size: 13px;
+  color: var(--klai-text-subtle);
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+/* Link groups */
+.links {
+  display: flex;
+  gap: 48px;
+}
+
+.linkGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Strap como mini-label del grupo */
+.groupLabel {
+  font-size: 10px !important;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+.link {
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  transition: color 0.15s ease;
+}
+
+.link:hover {
+  color: var(--klai-text);
+}
+
+/* Bottom bar */
+.bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 24px;
+  border-top: 1px solid var(--klai-divider);
+}
+
+.copy,
+.credit {
+  font-size: 12px;
+  color: var(--klai-text-subtle);
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .inner {
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .links {
+    gap: 32px;
+  }
+
+  .bottom {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+}

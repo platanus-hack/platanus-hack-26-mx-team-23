@@ -1,0 +1,212 @@
+.section {
+  padding: var(--section-y) 0;
+}
+
+.header {
+  margin-bottom: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.title {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(40px, 5.5vw, 68px);
+  letter-spacing: -0.04em;
+  line-height: 1.0;
+  color: var(--klai-text);
+}
+
+.accent {
+  color: var(--klai-accent);
+}
+
+.sub {
+  font-size: 17px;
+  color: var(--klai-text-muted);
+  max-width: 360px;
+  line-height: 1.65;
+}
+
+/* Card wrapper */
+.cardWrap {
+  display: flex;
+  justify-content: flex-start;
+  position: relative;
+}
+
+.glowBehind {
+  position: absolute;
+  top: -80px;
+  left: 0;
+  width: 480px;
+  height: 320px;
+  background: radial-gradient(ellipse, var(--klai-accent-glow) 0%, transparent 70%);
+  filter: blur(60px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Card */
+.card {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  padding: 40px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(36px) saturate(1.6);
+  -webkit-backdrop-filter: blur(36px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  overflow: hidden;
+  z-index: 1;
+}
+
+/* Línea de acento superior */
+.accentRule {
+  position: absolute;
+  top: 0;
+  left: 48px;
+  width: 80px;
+  height: 2px;
+  background: var(--klai-accent);
+  opacity: 0.5;
+}
+
+.cardTop {
+  margin-bottom: 28px;
+}
+
+.plan {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--klai-accent);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+.planDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--klai-accent);
+  flex-shrink: 0;
+}
+
+.price {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.priceAmount {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: 64px;
+  letter-spacing: -0.05em;
+  line-height: 1;
+  color: var(--klai-text);
+}
+
+.pricePer {
+  font-size: 16px;
+  color: var(--klai-text-muted);
+  font-weight: 400;
+}
+
+/* Features */
+.features {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 28px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  line-height: 1.5;
+}
+
+.check {
+  color: var(--klai-accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Actions */
+.cardActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.ctaPrimary {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 48px;
+  border-radius: 30px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ctaPrimary:hover {
+  opacity: 0.84;
+  transform: scale(1.01);
+}
+
+.ctaSecondary {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  border-radius: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--klai-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.ctaSecondary:hover {
+  color: var(--klai-text);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.donate {
+  font-size: 13px;
+  color: var(--klai-text-subtle);
+  line-height: 1.6;
+}
+
+.donateLink {
+  color: var(--klai-accent);
+  opacity: 0.8;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.donateLink:hover { opacity: 1; }
+
+@media (max-width: 480px) {
+  .card { padding: 28px 20px; }
+  .section { padding: var(--section-y-mobile) 0; }
+}

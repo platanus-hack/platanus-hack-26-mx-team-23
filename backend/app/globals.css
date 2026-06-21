@@ -1,40 +1,106 @@
+/* ============================================================
+   Klai — Design tokens (dark-only, cinematic / Apple TV aesthetic)
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Backgrounds — dark con tinte violeta para que el glass se note */
+  --klai-bg:            #07060f;
+  --klai-surface:       #0d0c1a;
+
+  /* Glass — solo para widgets sobre video */
+  --klai-glass:         rgba(16, 16, 24, 0.72);
+  --klai-glass-hover:   rgba(16, 16, 24, 0.85);
+  --klai-glass-border:  rgba(255, 255, 255, 0.07);
+  --klai-blur:          24px;
+
+  /* Text */
+  --klai-text:          #ffffff;
+  --klai-text-muted:    rgba(255, 255, 255, 0.48);
+  --klai-text-subtle:   rgba(255, 255, 255, 0.26);
+
+  /* Brand accent */
+  --klai-accent:        #8B7FFF;
+  --klai-accent-glow:   rgba(139, 127, 255, 0.22);
+  --klai-accent-dim:    rgba(139, 127, 255, 0.10);
+
+  /* Semantic */
+  --klai-success:       #4ADE80;
+  --klai-warning:       #FACC15;
+
+  /* Lines */
+  --klai-divider:       rgba(255, 255, 255, 0.05);
+  --klai-line:          rgba(255, 255, 255, 0.08);
+  --klai-line-strong:   rgba(255, 255, 255, 0.14);
+
+  /* Radii */
+  --r-widget: 14px;
+  --r-input:  10px;
+  --r-chip:   6px;
+  --r-strap:  3px;
+
+  /* Shadows */
+  --klai-shadow:    0 24px 64px rgba(0, 0, 0, 0.7);
+  --klai-shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.5);
+
+  /* Typography */
+  --font-clash:   'Clash Display', system-ui, sans-serif;
+  --font-satoshi: 'Satoshi', system-ui, sans-serif;
+
+  /* Spacing — más generoso, Apple TV respira mucho */
+  --section-y:        140px;
+  --section-y-mobile: 88px;
+  --content-max:      1200px;
+
+  /* Broadcast */
+  --strap-text: rgba(255, 255, 255, 0.55);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ---------- Reset ---------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
 html {
+  scroll-behavior: smooth;
   height: 100%;
 }
 
-html,
-body {
+html, body {
   max-width: 100vw;
   overflow-x: hidden;
 }
 
 body {
   min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--klai-bg);
+  color: var(--klai-text);
+  font-family: var(--font-satoshi), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+/* Ambient orbs fijos — dan color que el backdrop-filter puede difuminar */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 1000px 800px at 5%  5%,  rgba(139, 127, 255, 0.22) 0%, transparent 65%),
+    radial-gradient(ellipse  700px 600px at 92% 30%, rgba(100,  80, 220, 0.16) 0%, transparent 65%),
+    radial-gradient(ellipse  800px 700px at 50% 75%, rgba(139, 127, 255, 0.14) 0%, transparent 65%),
+    radial-gradient(ellipse  500px 400px at 20% 60%, rgba(80,   60, 180, 0.10) 0%, transparent 65%);
+}
+
+/* Todo el contenido va sobre los orbs */
+body > * {
+  position: relative;
+  z-index: 1;
 }
 
 a {
@@ -42,8 +108,61 @@ a {
   text-decoration: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
+img, video {
+  max-width: 100%;
+  display: block;
+}
+
+/* ---------- Glass panel ---------- */
+.glass-panel {
+  background: var(--klai-glass);
+  backdrop-filter: blur(var(--klai-blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--klai-blur)) saturate(160%);
+  border: 1px solid var(--klai-glass-border);
+  border-radius: var(--r-widget);
+  box-shadow: var(--klai-shadow);
+}
+
+/* ---------- Strap — label minimalista ---------- */
+.strap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--strap-text);
+  font-family: var(--font-satoshi), system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.strap::before {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 14px;
+  background: var(--klai-accent);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ---------- Container ---------- */
+.container {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 0 20px;
   }
+}
+
+/* ---------- Reduced-motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }

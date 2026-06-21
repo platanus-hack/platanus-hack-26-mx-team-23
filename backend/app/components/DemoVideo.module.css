@@ -1,0 +1,189 @@
+.monitor {
+  position: relative;
+  width: 100%;
+}
+
+.frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 20px;
+  background: #080808;
+  box-shadow: 0 40px 100px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06);
+}
+
+.videoPlaceholder {
+  position: absolute;
+  inset: 0;
+  background: #0d1117;
+  overflow: hidden;
+}
+
+.scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 3px,
+    rgba(255,255,255,0.01) 3px,
+    rgba(255,255,255,0.01) 4px
+  );
+  pointer-events: none;
+}
+
+.pitchGradient {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 60%, rgba(34,80,34,0.45) 0%, transparent 65%),
+    radial-gradient(ellipse at 50% 90%, rgba(20,50,20,0.3) 0%, transparent 50%),
+    linear-gradient(to bottom, #0d1117 0%, #0f1a0f 40%, #0d1117 100%);
+}
+
+/* Mock Scoreboard */
+.mockScoreboard {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(10,10,20,0.80);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 10px;
+  padding: 7px 16px;
+  white-space: nowrap;
+  animation: widgetIn 0.5s cubic-bezier(0.165,0.84,0.44,1) 0.5s both;
+}
+
+.mockTeam {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mockTeamRight {
+  flex-direction: row-reverse;
+}
+
+.mockCode {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.45);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.mockScore {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--klai-accent);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-geist-mono), monospace;
+  min-width: 18px;
+  text-align: center;
+}
+
+.mockDivider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.mockMin {
+  font-size: 9px;
+  color: rgba(255,255,255,0.28);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.mockStat {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(10,10,20,0.80);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(139,127,255,0.20);
+  border-radius: 8px;
+  padding: 7px 12px;
+  animation: widgetIn 0.5s cubic-bezier(0.165,0.84,0.44,1) 0.8s both;
+}
+
+.mockStatLabel {
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.30);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.mockStatValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--klai-accent);
+  font-family: var(--font-geist-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.playOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(0,0,0,0.28);
+}
+
+.playBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--klai-accent);
+  border: 2px solid rgba(255,255,255,0.15);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.playBtn:hover {
+  transform: scale(1.06);
+  opacity: 0.88;
+}
+
+.playLabel {
+  font-size: 13px;
+  color: rgba(255,255,255,0.45);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.shine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255,255,255,0.12) 40%, rgba(255,255,255,0.12) 60%, transparent);
+  pointer-events: none;
+}
+
+@keyframes widgetIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}

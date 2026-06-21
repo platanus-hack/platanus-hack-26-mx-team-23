@@ -1,0 +1,109 @@
+.section {
+  padding: var(--section-y) 0;
+}
+
+.header {
+  margin-bottom: 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.title {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(36px, 5vw, 60px);
+  letter-spacing: -0.04em;
+  line-height: 1.0;
+  color: var(--klai-text);
+}
+
+.accent {
+  color: var(--klai-accent);
+}
+
+.sub {
+  font-size: 17px;
+  color: var(--klai-text-muted);
+  max-width: 420px;
+  line-height: 1.65;
+}
+
+/* Grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+/* Step card */
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 32px 28px;
+  border-radius: 20px;
+  position: relative;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(32px) saturate(1.5);
+  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.step:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.11);
+}
+
+/* Numeral fantasma */
+.ghostNum {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  font-family: var(--font-clash);
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--klai-accent);
+  opacity: 0.06;
+  line-height: 1;
+  pointer-events: none;
+  letter-spacing: -0.04em;
+  user-select: none;
+}
+
+.stepIconTile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--klai-accent-dim);
+  color: var(--klai-accent);
+}
+
+.stepTitle {
+  font-family: var(--font-clash);
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--klai-text);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.stepDesc {
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  line-height: 1.65;
+}
+
+@media (max-width: 1024px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 540px) {
+  .grid { grid-template-columns: 1fr; }
+  .section { padding: var(--section-y-mobile) 0; }
+}

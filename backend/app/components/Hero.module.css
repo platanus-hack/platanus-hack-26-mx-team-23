@@ -1,0 +1,178 @@
+/* Hero — full viewport, Apple TV: imagen protagonista, texto encima */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  /* Sin padding-top: el nav flota sobre el hero */
+}
+
+/* Glow ambiental — uno, sutil */
+.glow {
+  position: absolute;
+  top: -160px;
+  left: -80px;
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, var(--klai-accent-glow) 0%, transparent 65%);
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+/* Layout 2 columnas */
+.inner {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 80px;
+  align-items: center;
+  padding: 120px 0 100px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Columna de texto */
+.textCol {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.strapWrap {
+  display: inline-block;
+}
+
+/* Headline — muy grande, Apple TV usa tipografía enorme */
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(52px, 7.5vw, 104px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: var(--klai-text);
+}
+
+.lineWrap {
+  display: block;
+  overflow: hidden;
+}
+
+.line {
+  display: block;
+}
+
+.lineAccent {
+  color: var(--klai-accent);
+}
+
+/* Sub — elegante, no muy denso */
+.sub {
+  font-size: clamp(15px, 1.6vw, 18px);
+  color: var(--klai-text-muted);
+  line-height: 1.7;
+  max-width: 440px;
+}
+
+/* CTAs */
+.ctas {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ctaPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 14px 28px;
+  border-radius: 30px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  white-space: nowrap;
+}
+
+.ctaPrimary:hover {
+  opacity: 0.84;
+  transform: scale(1.02);
+}
+
+.ctaSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 14px 24px;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 15px;
+  font-weight: 500;
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.ctaSecondary:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Monitor */
+.monitorCol {
+  position: relative;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .inner {
+    grid-template-columns: 1fr;
+    gap: 56px;
+    padding: 140px 0 80px;
+  }
+
+  .textCol {
+    align-items: center;
+    text-align: center;
+  }
+
+  .sub {
+    max-width: 560px;
+    margin: 0 auto;
+  }
+
+  .headline {
+    align-items: center;
+  }
+
+  .ctas {
+    justify-content: center;
+  }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .inner {
+    padding: 120px 0 60px;
+  }
+
+  .ctas {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .ctaPrimary,
+  .ctaSecondary {
+    width: 100%;
+    justify-content: center;
+  }
+}
