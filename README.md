@@ -48,7 +48,7 @@ While watching a match:
 
 The fastest way to try Klai. The extension talks to our hosted backend, so you don't need to run anything else.
 
-1. Download the latest `klai-extension-v1.0.1.zip` from the [Releases page](https://github.com/KiraBelak/overlai/releases).
+1. Download the latest `klai-extension-v1.0.2.zip` from the [Releases page](https://github.com/KiraBelak/overlai/releases).
 2. Unzip it.
 3. Open `chrome://extensions`, enable **Developer mode** (top right).
 4. Click **Load unpacked** and select the unzipped folder.
@@ -182,7 +182,7 @@ Contributions are welcome. Open an issue or a pull request. The curated-componen
 
   La forma más rápida de probar Klai. La extensión se conecta a nuestro backend en producción, no necesitas correr nada más.
 
-  1. Descarga el último `klai-extension-v1.0.1.zip` desde la [página de Releases](https://github.com/KiraBelak/overlai/releases).
+  1. Descarga el último `klai-extension-v1.0.2.zip` desde la [página de Releases](https://github.com/KiraBelak/overlai/releases).
   2. Descomprímelo.
   3. Abre `chrome://extensions`, activa el **Modo desarrollador** (arriba a la derecha).
   4. Haz clic en **Cargar descomprimida** y selecciona la carpeta descomprimida.
