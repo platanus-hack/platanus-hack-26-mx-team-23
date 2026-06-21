@@ -1,40 +1,114 @@
+/* ============================================================
+   Klai — Design tokens + glass system
+   ============================================================ */
+
+/* Fontshare fonts loaded via <link> in layout.tsx to avoid Turbopack stripping @import */
+
+/* ---------- Dark theme (default) ---------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --klai-bg:            #0A0A0F;
+  --klai-surface:       #101018;
+  --klai-glass:         rgba(16, 16, 24, 0.68);
+  --klai-glass-hover:   rgba(16, 16, 24, 0.80);
+  --klai-glass-border:  rgba(255, 255, 255, 0.08);
+  --klai-blur:          24px;
+
+  --klai-text:          #FFFFFF;
+  --klai-text-muted:    rgba(255, 255, 255, 0.5);
+  --klai-text-subtle:   rgba(255, 255, 255, 0.3);
+
+  --klai-accent:        #8B7FFF;
+  --klai-accent-glow:   rgba(139, 127, 255, 0.28);
+  --klai-accent-dim:    rgba(139, 127, 255, 0.12);
+
+  --klai-success:       #4ADE80;
+  --klai-warning:       #FACC15;
+  --klai-error:         #F87171;
+
+  --klai-divider:       rgba(255, 255, 255, 0.06);
+
+  /* Radii */
+  --r-widget: 16px;
+  --r-input:  12px;
+  --r-chip:   8px;
+
+  /* Shadows */
+  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--klai-glass-border);
+  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--klai-glass-border);
+
+  /* Typography */
+  --font-clash:   'Clash Display', system-ui, sans-serif;
+  --font-satoshi: 'Satoshi', system-ui, sans-serif;
+
+  /* Spacing rhythm */
+  --section-y: 120px;
+  --section-y-mobile: 80px;
+  --content-max: 1200px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ---------- Light theme override ---------- */
+[data-theme="light"] {
+  --klai-bg:            #F4F4FB;
+  --klai-surface:       #FFFFFF;
+  --klai-glass:         rgba(255, 255, 255, 0.65);
+  --klai-glass-hover:   rgba(255, 255, 255, 0.85);
+  --klai-glass-border:  rgba(10, 10, 30, 0.08);
+
+  --klai-text:          #0A0A0F;
+  --klai-text-muted:    rgba(10, 10, 30, 0.55);
+  --klai-text-subtle:   rgba(10, 10, 30, 0.35);
+
+  --klai-divider:       rgba(10, 10, 30, 0.07);
+
+  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.1), 0 0 0 1px var(--klai-glass-border);
+  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.07), 0 0 0 1px var(--klai-glass-border);
+}
+
+/* ---------- Dark explicit override ---------- */
+[data-theme="dark"] {
+  --klai-bg:            #0A0A0F;
+  --klai-surface:       #101018;
+  --klai-glass:         rgba(16, 16, 24, 0.68);
+  --klai-glass-hover:   rgba(16, 16, 24, 0.80);
+  --klai-glass-border:  rgba(255, 255, 255, 0.08);
+
+  --klai-text:          #FFFFFF;
+  --klai-text-muted:    rgba(255, 255, 255, 0.5);
+  --klai-text-subtle:   rgba(255, 255, 255, 0.3);
+
+  --klai-divider:       rgba(255, 255, 255, 0.06);
+
+  --klai-shadow:   0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--klai-glass-border);
+  --klai-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--klai-glass-border);
+}
+
+/* ---------- Reset ---------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
 html {
+  scroll-behavior: smooth;
   height: 100%;
 }
 
-html,
-body {
+html, body {
   max-width: 100vw;
   overflow-x: hidden;
 }
 
 body {
   min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--klai-bg);
+  color: var(--klai-text);
+  font-family: var(--font-satoshi), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 a {
@@ -42,8 +116,31 @@ a {
   text-decoration: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
+img, video {
+  max-width: 100%;
+  display: block;
+}
+
+/* ---------- Utility: glass panel material ---------- */
+.glass-panel {
+  background: var(--klai-glass);
+  backdrop-filter: blur(var(--klai-blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--klai-blur)) saturate(160%);
+  border: 1px solid var(--klai-glass-border);
+  border-radius: var(--r-widget);
+  box-shadow: var(--klai-shadow);
+}
+
+/* ---------- Layout container ---------- */
+.container {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 0 16px;
   }
 }

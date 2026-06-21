@@ -1,0 +1,203 @@
+.section {
+  padding: var(--section-y) 0;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 56px;
+}
+
+.badge {
+  display: inline-flex;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--klai-accent-dim);
+  color: var(--klai-accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin-bottom: 20px;
+}
+
+.title {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(36px, 5vw, 64px);
+  letter-spacing: -0.04em;
+  line-height: 1.0;
+  color: var(--klai-text);
+  margin-bottom: 16px;
+}
+
+.accent {
+  color: var(--klai-accent);
+}
+
+.sub {
+  font-size: 16px;
+  color: var(--klai-text-muted);
+  max-width: 360px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* Card */
+.cardWrap {
+  display: flex;
+  justify-content: center;
+}
+
+.card {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  padding: 40px;
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.glow {
+  position: absolute;
+  top: -40%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--klai-accent-glow) 0%, transparent 70%);
+  pointer-events: none;
+  filter: blur(32px);
+}
+
+.cardTop {
+  margin-bottom: 32px;
+}
+
+.plan {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--klai-accent);
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.price {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.priceAmount {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: 56px;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--klai-text);
+}
+
+.pricePer {
+  font-size: 16px;
+  color: var(--klai-text-muted);
+  font-weight: 400;
+}
+
+/* Features */
+.features {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--klai-divider);
+}
+
+.feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  line-height: 1.5;
+}
+
+.check {
+  color: var(--klai-accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Actions */
+.cardActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.ctaPrimary {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.ctaPrimary:hover {
+  opacity: 0.9;
+  box-shadow: 0 0 24px var(--klai-accent-glow);
+  transform: translateY(-1px);
+}
+
+.ctaSecondary {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--klai-glass-border);
+  color: var(--klai-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  background: transparent;
+}
+
+.ctaSecondary:hover {
+  color: var(--klai-text);
+  background: var(--klai-glass);
+  border-color: var(--klai-accent);
+}
+
+/* Donate */
+.donate {
+  font-size: 13px;
+  color: var(--klai-text-subtle);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.donateLink {
+  color: var(--klai-accent);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding: 28px 20px;
+  }
+
+  .section {
+    padding: var(--section-y-mobile) 0;
+  }
+}

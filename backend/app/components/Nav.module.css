@@ -1,0 +1,119 @@
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 12px 0;
+  transition: background 0.3s ease, backdrop-filter 0.3s ease, border-color 0.3s ease;
+  background: var(--klai-glass);
+  backdrop-filter: blur(var(--klai-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--klai-blur)) saturate(150%);
+  border-bottom: 1px solid var(--klai-glass-border);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.logoMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.03em;
+  box-shadow: 0 0 16px var(--klai-accent-glow);
+}
+
+.logoText {
+  font-family: var(--font-clash);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--klai-text);
+  letter-spacing: -0.03em;
+}
+
+/* Nav links */
+.links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: center;
+}
+
+.link {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--klai-text-muted);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.link:hover {
+  color: var(--klai-text);
+  background: var(--klai-accent-dim);
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.cta:hover {
+  opacity: 0.9;
+  box-shadow: 0 0 20px var(--klai-accent-glow);
+  transform: translateY(-1px);
+}
+
+.cta:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .links {
+    display: none;
+  }
+
+  .inner {
+    justify-content: space-between;
+  }
+}

@@ -1,0 +1,119 @@
+.footer {
+  padding-top: 80px;
+  padding-bottom: 32px;
+  border-top: 1px solid var(--klai-divider);
+}
+
+.inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 48px;
+  margin-bottom: 48px;
+}
+
+/* Logo */
+.left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--klai-accent);
+  color: #fff;
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.name {
+  font-family: var(--font-clash);
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--klai-text);
+  letter-spacing: -0.03em;
+}
+
+.tagline {
+  font-size: 13px;
+  color: var(--klai-text-subtle);
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+/* Link groups */
+.links {
+  display: flex;
+  gap: 48px;
+}
+
+.linkGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.groupLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--klai-text-subtle);
+  margin-bottom: 2px;
+}
+
+.link {
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  transition: color 0.15s ease;
+}
+
+.link:hover {
+  color: var(--klai-text);
+}
+
+/* Bottom bar */
+.bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 24px;
+  border-top: 1px solid var(--klai-divider);
+}
+
+.copy,
+.credit {
+  font-size: 12px;
+  color: var(--klai-text-subtle);
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .inner {
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .links {
+    gap: 32px;
+  }
+
+  .bottom {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+}

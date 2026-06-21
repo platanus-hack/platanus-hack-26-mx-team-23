@@ -1,0 +1,111 @@
+.section {
+  padding: var(--section-y) 0;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 64px;
+}
+
+.badge {
+  display: inline-flex;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--klai-accent-dim);
+  color: var(--klai-accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin-bottom: 20px;
+}
+
+.title {
+  font-family: var(--font-clash);
+  font-weight: 700;
+  font-size: clamp(32px, 4.5vw, 56px);
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  color: var(--klai-text);
+  margin-bottom: 16px;
+}
+
+.accent {
+  color: var(--klai-accent);
+}
+
+.sub {
+  font-size: 16px;
+  color: var(--klai-text-muted);
+  max-width: 400px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* Grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+/* Step card */
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 28px 24px;
+  border-radius: 20px;
+  position: relative;
+}
+
+.stepNum {
+  font-family: var(--font-clash);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--klai-accent);
+  opacity: 0.7;
+}
+
+.stepIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--klai-accent-dim);
+  color: var(--klai-accent);
+}
+
+.stepTitle {
+  font-family: var(--font-clash);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--klai-text);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.stepDesc {
+  font-size: 14px;
+  color: var(--klai-text-muted);
+  line-height: 1.65;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 540px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section {
+    padding: var(--section-y-mobile) 0;
+  }
+}
