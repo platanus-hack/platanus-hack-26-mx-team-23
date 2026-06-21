@@ -345,6 +345,21 @@ function layoutSignature(layout: Layout): string {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-dismiss constants for proactive alert widgets.
+// Alerts are momentary event announcements (goal, penalty, card) and should
+// disappear on their own after ALERT_AUTO_DISMISS_MS. The cooldown prevents
+// the watch loop from immediately re-adding the same alert after it auto-closes
+// (which would cause the old flicker bug). A DIFFERENT alert message bypasses
+// the cooldown and appears immediately.
+// ---------------------------------------------------------------------------
+const ALERT_AUTO_DISMISS_MS = 15_000
+const ALERT_COOLDOWN_MS = 45_000
+
+// Module-level cooldown tracker: alert widgetSignature → timestamp of auto-close.
+// Checked in the proactive accumulate path before adding a new alert instance.
+const recentlyAutoClosedAlerts = new Map<string, number>()
+
+// ---------------------------------------------------------------------------
 // Dismissed proactive widget signatures — module-level (per content-script
 // lifetime, i.e. per tab).
 //
@@ -834,6 +849,44 @@ export function Overlay() {
   // Signature of the last proactive suggestion shown — used to skip duplicate detections.
   const lastSuggestionSignatureRef = useRef<string>('')
 
+  // Per-instance auto-dismiss timers for proactive alert widgets.
+  // Keyed by instance id. Timers are cleared on closeInstance, unmount, and Clear all.
+  const alertTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  // Scratch list populated inside the accumulateLayout setInstances updater so we
+  // can schedule timers after the updater returns (timers must not be started inside
+  // the updater itself because React may call updaters more than once in strict mode).
+  // Each entry: { id, sig, reset } where reset=true means cancel the old timer first.
+  const pendingAlertTimerOpsRef = useRef<Array<{ id: string; sig: string; reset: boolean }>>([])
+
+  // Schedule (or reset) the auto-dismiss timer for a proactive alert instance.
+  // Called right after accumulateLayout's setInstances call drains pendingAlertTimerOpsRef.
+  const scheduleAlertTimer = useCallback((id: string, sig: string, reset: boolean) => {
+    if (reset) {
+      const existing = alertTimersRef.current.get(id)
+      if (existing !== undefined) {
+        clearTimeout(existing)
+        alertTimersRef.current.delete(id)
+      }
+    }
+    const timer = setTimeout(() => {
+      alertTimersRef.current.delete(id)
+      // Record cooldown BEFORE removing from state so the watch loop cannot sneak
+      // the same alert back in between the two operations.
+      recentlyAutoClosedAlerts.set(sig, Date.now())
+      // Auto-close: NOT user-initiated — does not add to dismissedAutoTypes so
+      // a genuinely new alert (different message) can still appear later.
+      setInstances((prev) => prev.filter((i) => i.id !== id))
+      setRevealedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      measureRefs.current.delete(id)
+    }, ALERT_AUTO_DISMISS_MS)
+    alertTimersRef.current.set(id, timer)
+  }, [])
+
   // Keep videoRect in sync with the page <video> element.
   useEffect(() => {
     function findVideo() {
@@ -861,6 +914,9 @@ export function Overlay() {
   // ---------------------------------------------------------------------------
   const accumulateLayout = useCallback(
     (layout: Layout, proactive: boolean) => {
+      // Reset the scratch list before each call so we start clean.
+      pendingAlertTimerOpsRef.current = []
+
       setInstances((prev) => {
         const next = [...prev]
         const newIds: string[] = []
@@ -892,6 +948,14 @@ export function Overlay() {
                 widget: node.widget,
                 zIndex: node.zIndex ?? 10,
               }
+              // If this is a proactive alert, reset its auto-dismiss timer (new message → 15s restart).
+              if (widgetType === 'alert') {
+                pendingAlertTimerOpsRef.current.push({
+                  id: next[existingProactiveIdx].id,
+                  sig,
+                  reset: true,
+                })
+              }
               continue
             }
 
@@ -905,7 +969,16 @@ export function Overlay() {
             // 4. Also skip the per-signature dismissed set (backwards compat).
             if (dismissedSignatures.has(sig)) continue
 
-            // 5. No existing instance of this type — ADD as new proactive instance.
+            // 5. Cooldown check for proactive alerts: if this exact alert signature
+            //    was auto-closed within ALERT_COOLDOWN_MS, skip it so the watch loop
+            //    cannot immediately re-add the just-dismissed alert (no flicker).
+            //    A DIFFERENT alert message has a different signature and is not blocked.
+            if (widgetType === 'alert') {
+              const closedAt = recentlyAutoClosedAlerts.get(sig)
+              if (closedAt !== undefined && Date.now() - closedAt < ALERT_COOLDOWN_MS) continue
+            }
+
+            // 6. No existing instance of this type — ADD as new proactive instance.
           } else {
             // --- MANUAL PATH: identity-based dedup (unchanged behavior) ---
             //
@@ -964,6 +1037,12 @@ export function Overlay() {
               placedOffsetY: 0,
             })
             newIds.push(id)
+
+            // Schedule auto-dismiss for new PROACTIVE alert instances only.
+            // Manual alerts (proactive=false) are user-requested and must not auto-close.
+            if (proactive && widgetType === 'alert') {
+              pendingAlertTimerOpsRef.current.push({ id, sig, reset: false })
+            }
           }
         }
 
@@ -1005,8 +1084,16 @@ export function Overlay() {
 
         return next
       })
+
+      // Schedule any pending alert timers collected during the updater.
+      // Done here (outside the updater) so React's strict-mode double-invoke
+      // of updaters does not create duplicate timers.
+      for (const op of pendingAlertTimerOpsRef.current) {
+        scheduleAlertTimer(op.id, op.sig, op.reset)
+      }
+      pendingAlertTimerOpsRef.current = []
     },
-    [],
+    [scheduleAlertTimer],
   )
 
   // Close a single widget instance by ID.
@@ -1015,6 +1102,13 @@ export function Overlay() {
   // cannot re-open it. Proactive instances also add their type to
   // dismissedAutoTypes so the watch loop suppresses that type going forward.
   const closeInstance = useCallback((id: string, userInitiated = true) => {
+    // Clear any pending auto-dismiss timer for this instance — user beat it to it.
+    const existingTimer = alertTimersRef.current.get(id)
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer)
+      alertTimersRef.current.delete(id)
+    }
+
     setInstances((prev) => {
       if (userInitiated) {
         const inst = prev.find((i) => i.id === id)
@@ -1115,6 +1209,12 @@ export function Overlay() {
           dismissedSignatures.clear()
           dismissedAutoTypes.clear()
           lastSuggestionSignatureRef.current = ''
+          // Clear all alert timers and the cooldown map so watch mode gets a clean slate.
+          for (const timer of alertTimersRef.current.values()) {
+            clearTimeout(timer)
+          }
+          alertTimersRef.current.clear()
+          recentlyAutoClosedAlerts.clear()
           break
         }
       }
@@ -1251,6 +1351,11 @@ export function Overlay() {
         clearInterval(revealTimerRef.current)
         revealTimerRef.current = null
       }
+      // Clear all pending alert auto-dismiss timers to prevent post-unmount state updates.
+      for (const timer of alertTimersRef.current.values()) {
+        clearTimeout(timer)
+      }
+      alertTimersRef.current.clear()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1539,6 +1644,12 @@ export function Overlay() {
               dismissedSignatures.clear()
               dismissedAutoTypes.clear()
               lastSuggestionSignatureRef.current = ''
+              // Clear all alert timers and the cooldown map so alerts can resurface.
+              for (const timer of alertTimersRef.current.values()) {
+                clearTimeout(timer)
+              }
+              alertTimersRef.current.clear()
+              recentlyAutoClosedAlerts.clear()
             }}
             style={{
               position: 'fixed',
