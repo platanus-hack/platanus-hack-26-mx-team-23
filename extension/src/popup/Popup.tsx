@@ -65,7 +65,7 @@ export function Popup() {
   const [text, setText] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [watchMode, setWatchMode] = useState(false)
-  const [narrationEnabled, setNarrationEnabled] = useState(false)
+  const [narrationEnabled, setNarrationEnabled] = useState(true)
   const [intro, setIntro] = useState<'idle' | 'thinking' | 'done'>('idle')
 
   const busy = status === 'listening' || status === 'sending'
@@ -80,7 +80,8 @@ export function Popup() {
   useEffect(() => {
     chrome.storage.local.get(['watchMode', 'narration'], (result) => {
       if (typeof result.watchMode === 'boolean') setWatchMode(result.watchMode)
-      if (typeof result.narration === 'boolean') setNarrationEnabled(result.narration)
+      // Default ON — only respect an explicit stored false (user deliberately muted).
+      setNarrationEnabled(result.narration === false ? false : true)
     })
   }, [])
 

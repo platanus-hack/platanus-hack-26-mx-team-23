@@ -1074,9 +1074,10 @@ export function Overlay() {
   const [voiceState, setVoiceState] = useState<VoiceIndicatorState>('idle')
 
   // Narration enabled/disabled — persisted in chrome.storage.local under 'narration'.
-  const [narrationEnabled, setNarrationEnabled] = useState(false)
+  // Defaults ON; only an explicitly-stored false (user muted) overrides it.
+  const [narrationEnabled, setNarrationEnabled] = useState(true)
   // Ref mirror so accumulateLayout (a useCallback) always reads the latest value.
-  const narrationEnabledRef = useRef(false)
+  const narrationEnabledRef = useRef(true)
   narrationEnabledRef.current = narrationEnabled
   // Tracks the last content hash spoken per instance id.
   // Used to prevent re-narrating the same widget data on every React re-render.
@@ -1975,9 +1976,8 @@ export function Overlay() {
   useEffect(() => {
     // Load persisted narration preference on mount.
     chrome.storage.local.get('narration', (result) => {
-      if (typeof result.narration === 'boolean') {
-        setNarrationEnabled(result.narration)
-      }
+      // Default ON — only respect an explicit stored false (user deliberately muted).
+      setNarrationEnabled(result.narration === false ? false : true)
     })
 
     function handleNarration(event: Event) {

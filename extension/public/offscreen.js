@@ -151,11 +151,22 @@ function finalize(mime) {
 // the AUDIO_PLAYBACK offscreen reason keeps it active.
 let narrationAudio = null
 let narrationObjectUrl = null
+// AbortController for the currently in-flight /api/tts fetch.
+// Replaced on every new KLAI_SPEAK so an older in-flight fetch is immediately
+// cancelled and can never play after a newer request has started.
+let narrationFetchController = null
 
 /**
- * Stop any currently-playing narration clip and revoke its object URL.
+ * Abort any in-flight /api/tts fetch and stop any currently-playing clip.
+ * Called at the top of every speakOffscreen() so a new narration always
+ * interrupts — no backlog, no queue dump.
  */
 function stopNarration() {
+  // Cancel the in-flight fetch first so it cannot play after this point.
+  if (narrationFetchController) {
+    narrationFetchController.abort()
+    narrationFetchController = null
+  }
   if (narrationAudio) {
     narrationAudio.pause()
     narrationAudio.src = ''
@@ -174,14 +185,22 @@ function stopNarration() {
 async function speakOffscreen(text, backendUrl) {
   if (!text || !text.trim()) return
 
-  // Stop any previous clip before starting a new one.
+  // Abort any previous in-flight fetch and stop any playing clip before starting
+  // the new one. This is the latest-wins guarantee: a rewound video or rapid
+  // watch-mode burst can never produce a backlog dump.
   stopNarration()
+
+  // Fresh controller for this fetch — stored at module level so the NEXT call
+  // to stopNarration() can abort it before it resolves.
+  const controller = new AbortController()
+  narrationFetchController = controller
 
   try {
     const res = await fetch(`${backendUrl}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     })
 
     if (!res.ok) {
@@ -191,7 +210,12 @@ async function speakOffscreen(text, backendUrl) {
     }
 
     const blob = await res.blob()
+
+    // Guard: if this fetch was superseded while we were awaiting the blob, bail.
+    if (controller.signal.aborted) return
+
     narrationObjectUrl = URL.createObjectURL(blob)
+    narrationFetchController = null // fetch is done; controller no longer needed
 
     narrationAudio = new Audio(narrationObjectUrl)
 
@@ -213,6 +237,10 @@ async function speakOffscreen(text, backendUrl) {
 
     await narrationAudio.play()
   } catch (err) {
+    // An AbortError means a newer narration cancelled this one intentionally.
+    // Do not fall back — just discard this clip silently.
+    if (err && err.name === 'AbortError') return
+
     console.warn('[Klai offscreen] speakOffscreen failed:', err)
     if (narrationObjectUrl) {
       URL.revokeObjectURL(narrationObjectUrl)
