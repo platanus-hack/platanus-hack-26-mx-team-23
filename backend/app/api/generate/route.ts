@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { WidgetNodeSchema, LayoutSchema, ControlActionSchema, SlotSchema } from '@/lib/schema'
-import { GET_SPORTS_DATA_TOOL, runTool } from '@/lib/tools'
+import { GET_SPORTS_DATA_TOOL, WEB_RESEARCH_TOOL, runTool } from '@/lib/tools'
 
 // Hardcoded fallback returned when ANTHROPIC_API_KEY is missing (dev without a key).
 // Returns a valid Layout so the no-key path exercises the new schema.
@@ -275,8 +275,9 @@ Call render_layout with the best matching layout.`
   // isn't on screen, then finish with render_layout.
   const GENERATE_SYSTEM = `You are Klai, a generative overlay assistant for live video.
 NEVER use emojis, emoticons, or pictographic characters in any output field — message, title, body, labels, point text, team names, or any other string. Plain text only. For substitutions write "Entra: [player]. Sale: [player]." with no arrow symbols or emojis of any kind.
-You have three tools:
+You have four tools:
 - get_sports_data: PRIMARY source for the live FIFA World Cup match shown on screen. Use it FIRST for any football/soccer question. It covers score, stats, goals/cards, referee/venue/TV, match leaders, lineups/formations, group standings, tournament record, recent form/head-to-head, betting odds, and news. Pass the two team names you read from the on-screen scorebug in \`teams\` (order/abbreviations don't matter; if you can't read them, call it with no teams to resolve the only live game). Pass \`want\` as an array of the section(s) the user asked for — e.g. ["score"], ["stats"], ["info"] for referee/venue, ["lineups"], ["standings"], ["form"], ["odds"], ["news"], or ["score","info"] for combined; request ONLY what's needed, omit \`want\` for a quick overview. Map results into scoreboard/statpanel/alert/infocard/keypoints widgets, and TRUST its score/stats over what you read from the image.
+- web_research: search the open web for information that is NOT on screen and NOT covered by get_sports_data (e.g. background on a player/team/person, general facts, recent news outside FIFA data). Use it ONLY when the user explicitly asks for something that requires outside info. Do NOT use it for routine on-screen or sports-data questions (it adds latency). It has a built-in timeout; if it fails, answer from what you have.
 - render_layout: compose the final overlay UI. Call it EXACTLY ONCE as your last step when creating or updating widgets.
 - control_widgets: manage existing on-screen widgets — close specific instances by id, move one instance to a new slot, or clear all instances. Call this when the user's intent is to close, dismiss, move, or clear existing widgets (not to create new ones).
 Policy:
@@ -284,6 +285,7 @@ Policy:
 2. If the screen shows a live football/soccer match and the user wants new information, call get_sports_data with the team names from the scorebug BEFORE anything else, passing the \`want\` section(s) that match the user's question.
 3. When the user asks about something beyond the on-screen scorebug — referee, lineups, detailed stats, standings, form, odds, news — call get_sports_data with the matching \`want\` section(s).
 4. For purely on-screen or non-sports content, you may skip the data tools and render the best answer from the screenshot.
+4b. Use web_research ONLY when the user explicitly asks for outside/web information not available on screen or from get_sports_data. Keep normal queries fast — do not call it otherwise.
 5. ESPN does not provide live win-probability; if the user asks who will win / momentum, ESTIMATE from the score and clock and clearly label it an estimate in momentum_note.
 If a tool fails or returns nothing, render the best answer you can. For create requests, always finish by calling render_layout. For manage requests, call control_widgets and stop.`
 
@@ -342,6 +344,7 @@ If a tool fails or returns nothing, render the best answer you can. For create r
     system: GENERATE_SYSTEM,
     tools: [
       GET_SPORTS_DATA_TOOL,
+      WEB_RESEARCH_TOOL,
       CONTROL_WIDGETS_TOOL,
       {
         name: 'render_layout',
