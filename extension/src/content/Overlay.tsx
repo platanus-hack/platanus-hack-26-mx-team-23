@@ -1245,15 +1245,11 @@ export function Overlay() {
                 // actively-updating card (e.g. live scoreboard) never expires while in use.
                 pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: true, reset: true })
               }
-              // Narrate the updated widget if data changed.
-              // Proactive updates respect the narration toggle; manual updates always narrate.
+              // Proactive updates: never narrate — watch events are silent.
               const newHash = widgetContentHash(node.widget)
-              if (narrationEnabledRef.current && lastSpokenHashRef.current.get(updatedId) !== newHash) {
-                const phrase = buildSpokenPhrase(node.widget)
-                if (phrase) {
-                  pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
-                }
-              }
+              // Only update the hash tracker so we don't re-narrate if the same
+              // content later arrives via a manual query.
+              void newHash
               continue
             }
 
@@ -1318,10 +1314,9 @@ export function Overlay() {
             if (node.widget.type !== 'alert') {
               pendingGenericTimerOpsRef.current.push({ id: updatedId, sig, proactive: false, reset: true })
             }
-            // Narrate updated widget if data changed.
-            // Manual queries (!proactive) always narrate; proactive respects the narration toggle.
+            // Narrate updated widget only on manual queries (never for proactive/watch events).
             const newHash = widgetContentHash(node.widget)
-            if ((!proactive || narrationEnabledRef.current) && lastSpokenHashRef.current.get(updatedId) !== newHash) {
+            if ((!proactive && narrationEnabledRef.current) && lastSpokenHashRef.current.get(updatedId) !== newHash) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 pendingNarrationOpsRef.current.push({ phrase, instanceId: updatedId, hash: newHash })
@@ -1366,9 +1361,8 @@ export function Overlay() {
               lastKnownScore = { home: h, away: a, minute: node.widget.minute }
             }
 
-            // Narrate newly added widget.
-            // Manual queries (!proactive) always narrate; proactive respects the narration toggle.
-            if (!proactive || narrationEnabledRef.current) {
+            // Narrate newly added widget only on manual queries (never for proactive/watch events).
+            if (!proactive && narrationEnabledRef.current) {
               const phrase = buildSpokenPhrase(node.widget)
               if (phrase) {
                 const hash = widgetContentHash(node.widget)
@@ -1880,16 +1874,8 @@ export function Overlay() {
         return next
       })
 
-      // Narrate auto-scoreboard only when the score content actually changes.
-      // This prevents spammy narration on every poll tick (every 3.5 s).
-      if (narrationEnabledRef.current) {
-        const scoreHash = widgetContentHash(scoreboardWidget)
-        if (lastAutoScoreHashRef.current !== scoreHash) {
-          lastAutoScoreHashRef.current = scoreHash
-          const phrase = buildSpokenPhrase(scoreboardWidget)
-          if (phrase) narrate(phrase)
-        }
-      }
+      // Auto-scoreboard is proactive (watch mode) — never narrated.
+      // The widget renders visually; speaking is reserved for manual queries only.
     }
 
     window.addEventListener('klai:score-state', handleScoreState)
